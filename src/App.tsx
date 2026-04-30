@@ -1,3 +1,5 @@
+import { useState } from 'react'
+import LoadingScreen from './components/LoadingScreen'
 import Navbar from './components/Navbar'
 import Hero from './components/Hero'
 import StartSection from './components/StartSection'
@@ -8,19 +10,29 @@ import Testimonials from './components/Testimonials'
 import CtaFooter from './components/CtaFooter'
 
 function App() {
+  const [loaded, setLoaded] = useState(false)
+
   return (
-    <div className="bg-black">
-      <div className="relative z-10">
+    <div style={{ background: 'var(--bg)' }}>
+      {/* Loading screen — sits on top, fades out when done */}
+      <LoadingScreen onComplete={() => setLoaded(true)} />
+
+      {/* Main page content — fades in once loader exits */}
+      <div
+        style={{
+          opacity: loaded ? 1 : 0,
+          transition: 'opacity 0.6s ease-in-out',
+          transitionDelay: loaded ? '0.1s' : '0s',
+        }}
+      >
         <Navbar />
         <Hero />
-        <div className="bg-black">
-          <StartSection />
-          <FeaturesChess />
-          <FeaturesGrid />
-          <Stats />
-          <Testimonials />
-          <CtaFooter />
-        </div>
+        <StartSection />
+        <FeaturesChess />
+        <FeaturesGrid />
+        <Stats />
+        <Testimonials />
+        <CtaFooter />
       </div>
     </div>
   )

@@ -1,131 +1,120 @@
-import { motion } from 'motion/react'
-import { ArrowUpRight } from 'lucide-react'
+import { FadeUp, Typewriter } from './Animations'
 import HlsVideo from './HlsVideo'
-import BlurText from './BlurText'
+import { ArrowRight } from 'lucide-react'
+
+const steps = [
+  {
+    num: '01',
+    title: 'Connect',
+    desc: 'Link any EVM-compatible wallet. MetaMask, WalletConnect, Ledger. No KYC. No gatekeepers.',
+    tag: 'PERMISSIONLESS',
+  },
+  {
+    num: '02',
+    title: 'Deploy',
+    desc: 'Push your contract bytecode. Our validator set confirms in under 400ms. Finality, not probability.',
+    tag: 'SUB-SECOND FINALITY',
+  },
+  {
+    num: '03',
+    title: 'Scale',
+    desc: 'Protocol handles throughput. You focus on product. 50,000 TPS. No congestion auctions.',
+    tag: '50K TPS',
+  },
+]
 
 export default function StartSection() {
   return (
-    <section
-      id="protocol"
-      className="relative overflow-hidden"
-      style={{ minHeight: '700px' }}
-    >
-      {/* HLS Video Background */}
-      <HlsVideo
-        src="https://stream.mux.com/9JXDljEVWYwWu01PUkAemafDugK89o01BR6zqJ3aS9u00A.m3u8"
-        className="absolute inset-0 w-full h-full object-cover z-0"
-        style={{ filter: 'brightness(0.3) hue-rotate(180deg) saturate(1.5)' }}
-      />
-
-      {/* Grid overlay for crypto feel */}
-      <div className="absolute inset-0 grid-bg opacity-20 z-[1] pointer-events-none" />
-
-      {/* Neon glow pulse */}
-      <div
-        className="absolute z-[1] pointer-events-none"
-        style={{
-          top: '50%',
-          left: '50%',
-          transform: 'translate(-50%, -50%)',
-          width: '600px',
-          height: '600px',
-          background: 'radial-gradient(circle, rgba(0,229,255,0.06) 0%, transparent 70%)',
-        }}
-      />
-
-      {/* Top gradient */}
-      <div
-        className="absolute top-0 left-0 right-0 z-[2] pointer-events-none"
-        style={{
-          height: '200px',
-          background: 'linear-gradient(to bottom, black, transparent)',
-        }}
-      />
-      {/* Bottom gradient */}
-      <div
-        className="absolute bottom-0 left-0 right-0 z-[2] pointer-events-none"
-        style={{
-          height: '200px',
-          background: 'linear-gradient(to top, black, transparent)',
-        }}
-      />
-
-      {/* Content */}
-      <div
-        className="relative z-10 flex flex-col items-center justify-center text-center px-6 py-32"
-        style={{ minHeight: '700px' }}
-      >
-        {/* Badge */}
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          whileInView={{ opacity: 1, y: 0 }}
-          viewport={{ once: true }}
-          transition={{ duration: 0.5 }}
-          className="liquid-glass rounded-full px-3.5 py-1 mb-6"
-          id="start-badge"
-        >
-          <span className="text-xs font-medium text-white font-body tracking-wider uppercase">
-            How It Works
-          </span>
-        </motion.div>
-
-        {/* Heading */}
-        <BlurText
-          text="You propose. The chain executes."
-          className="text-4xl md:text-5xl lg:text-6xl font-heading italic text-white tracking-tight leading-[0.9] max-w-3xl mb-6"
-          delay={80}
-          splitBy="words"
+    <section id="protocol" className="relative overflow-hidden" style={{ background: 'var(--bg)' }}>
+      {/* Video strip — full bleed, heavily tinted */}
+      <div className="relative h-[40vh] overflow-hidden">
+        <HlsVideo
+          src="https://stream.mux.com/9JXDljEVWYwWu01PUkAemafDugK89o01BR6zqJ3aS9u00A.m3u8"
+          className="absolute inset-0 w-full h-full object-cover"
+          style={{ filter: 'brightness(0.15) saturate(0.4) hue-rotate(200deg)' }}
         />
+        <div
+          className="absolute inset-0"
+          style={{ background: 'linear-gradient(to right, rgba(8,8,8,0.95) 30%, rgba(8,8,8,0.4) 100%)' }}
+        />
+        <div className="absolute inset-0 grid-lines opacity-60" />
 
-        {/* Subtext */}
-        <motion.p
-          initial={{ opacity: 0, y: 20 }}
-          whileInView={{ opacity: 1, y: 0 }}
-          viewport={{ once: true }}
-          transition={{ duration: 0.6, delay: 0.4 }}
-          className="text-white/50 font-body font-light text-sm md:text-base max-w-lg mb-10 leading-relaxed"
-          id="start-subtext"
-        >
-          Connect your wallet. Deploy your contract. The protocol handles consensus,
-          settlement, and security — all in seconds, not days.
-        </motion.p>
-
-        {/* CTA */}
-        <motion.a
-          href="#cta"
-          initial={{ opacity: 0, y: 20 }}
-          whileInView={{ opacity: 1, y: 0 }}
-          viewport={{ once: true }}
-          transition={{ duration: 0.5, delay: 0.6 }}
-          className="flex items-center gap-2 liquid-glass-strong rounded-full px-6 py-3 text-sm font-body font-medium text-white hover:scale-105 transition-transform duration-200"
-          id="start-cta"
-        >
-          Start Building
-          <ArrowUpRight size={16} />
-        </motion.a>
-
-        {/* Step indicators */}
-        <motion.div
-          initial={{ opacity: 0 }}
-          whileInView={{ opacity: 1 }}
-          viewport={{ once: true }}
-          transition={{ duration: 0.8, delay: 0.8 }}
-          className="flex items-center gap-8 mt-16"
-          id="start-steps"
-        >
-          {[
-            { num: '01', label: 'Connect Wallet' },
-            { num: '02', label: 'Deploy Contract' },
-            { num: '03', label: 'Go Live On-Chain' },
-          ].map((step, i) => (
-            <div key={i} className="flex flex-col items-center gap-2">
-              <span className="text-neon font-heading italic text-2xl">{step.num}</span>
-              <span className="text-white/40 text-xs font-body font-light tracking-wider uppercase">
-                {step.label}
+        {/* Overlay text on video strip */}
+        <div className="absolute inset-0 flex items-center px-6 lg:px-12">
+          <div className="max-w-2xl">
+            <div className="mono-amber mb-3">// HOW IT WORKS</div>
+            <h2
+              className="font-heading font-bold text-white"
+              style={{ fontSize: 'clamp(2rem, 5vw, 4rem)', lineHeight: 0.9, letterSpacing: '-0.025em' }}
+            >
+              <Typewriter text="You propose." delay={200} />
+              <br />
+              <span style={{ color: 'var(--amber)' }}>
+                <Typewriter text="The chain executes." delay={900} />
               </span>
-            </div>
+            </h2>
+          </div>
+        </div>
+
+        {/* Right: amber vertical rule */}
+        <div
+          className="absolute right-[15%] top-0 bottom-0 w-px hidden lg:block"
+          style={{ background: 'var(--amber)', opacity: 0.12 }}
+        />
+      </div>
+
+      {/* Steps — data-table layout */}
+      <div className="max-w-7xl mx-auto px-6 lg:px-12 py-16">
+        <div className="grid grid-cols-1 lg:grid-cols-3 divide-y lg:divide-y-0 lg:divide-x"
+          style={{ borderColor: 'rgba(255,255,255,0.06)' }}
+        >
+          {steps.map((step, i) => (
+            <FadeUp key={step.num} delay={i * 0.12}>
+              <div className="flex flex-col gap-4 p-8 group hover:bg-white/[0.015] transition-colors duration-300">
+                {/* Number + tag */}
+                <div className="flex items-center justify-between">
+                  <span
+                    className="font-mono-custom font-bold"
+                    style={{ color: 'var(--amber)', fontSize: '2rem', lineHeight: 1 }}
+                  >
+                    {step.num}
+                  </span>
+                  <span className="mono" style={{ color: 'var(--text-muted)' }}>{step.tag}</span>
+                </div>
+
+                {/* Title */}
+                <h3
+                  className="font-heading font-bold text-white"
+                  style={{ fontSize: '1.5rem', letterSpacing: '-0.02em' }}
+                >
+                  {step.title}
+                </h3>
+
+                {/* Desc */}
+                <p className="font-heading font-light text-sm leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
+                  {step.desc}
+                </p>
+
+                {/* Bottom amber rule on hover */}
+                <div
+                  className="h-px w-0 group-hover:w-full transition-all duration-500 mt-auto pt-4"
+                  style={{ background: 'var(--amber)', opacity: 0.4 }}
+                />
+              </div>
+            </FadeUp>
           ))}
-        </motion.div>
+        </div>
+
+        <FadeUp delay={0.4}>
+          <div className="mt-8 pt-8 flex items-center justify-between" style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+            <span className="mono" style={{ color: 'var(--text-muted)' }}>
+              AVERAGE DEPLOYMENT TIME: <span className="text-white">{'< 2 MIN'}</span>
+            </span>
+            <a href="#cta" className="btn-primary text-[11px] py-2 px-5">
+              Start Building <ArrowRight size={13} />
+            </a>
+          </div>
+        </FadeUp>
       </div>
     </section>
   )

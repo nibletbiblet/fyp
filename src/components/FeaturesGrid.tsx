@@ -1,98 +1,151 @@
 import { motion } from 'motion/react'
-import { Zap, Lock, BarChart3, Shield } from 'lucide-react'
-import BlurText from './BlurText'
+import { FadeUp } from './Animations'
 
-const features = [
+const capabilities = [
   {
-    id: 'feature-speed',
-    icon: Zap,
-    title: 'Sub-Second Finality',
-    body: 'Transactions confirm in under 400ms. Not eventually consistent. Truly final. Because latency is a liability in DeFi.',
+    id: 'cap-finality',
+    code: 'FIN',
+    title: 'Single-Block Finality',
+    detail: 'No probabilistic confirmation windows. Finality happens in one block, guaranteed by BFT consensus.',
+    metric: '400ms',
+    metricLabel: 'finality time',
   },
   {
-    id: 'feature-privacy',
-    icon: Lock,
-    title: 'Zero-Knowledge Native',
-    body: 'Privacy built into the base layer. ZK proofs verify without revealing. Your on-chain activity stays yours.',
+    id: 'cap-zk',
+    code: 'ZKP',
+    title: 'Native ZK Proofs',
+    detail: 'Privacy-preserving computation at the base layer. Prove state transitions without revealing inputs.',
+    metric: '2.1KB',
+    metricLabel: 'avg proof size',
   },
   {
-    id: 'feature-yield',
-    icon: BarChart3,
-    title: 'Yield-Optimized',
-    body: 'Stake, earn, and compound — all natively. Protocol-level yield mechanics designed to outperform centralized alternatives.',
+    id: 'cap-yield',
+    code: 'YLD',
+    title: 'Protocol Yield',
+    detail: 'Liquid staking built into the execution layer. Earn validator rewards without bridging or wrapping.',
+    metric: '8.4%',
+    metricLabel: 'annual yield',
   },
   {
-    id: 'feature-security',
-    icon: Shield,
-    title: 'Audited & Immutable',
-    body: 'Triple-audited by leading security firms. Bug bounties live on-chain. Every contract deployed is battle-hardened.',
+    id: 'cap-audit',
+    code: 'SEC',
+    title: 'Triple Audited',
+    detail: 'Trail of Bits + OpenZeppelin + Halborn. Ongoing bug bounty at $500K per critical vulnerability.',
+    metric: '$500K',
+    metricLabel: 'bug bounty cap',
+  },
+  {
+    id: 'cap-evm',
+    code: 'EVM',
+    title: 'EVM Compatible',
+    detail: 'Deploy existing Solidity contracts with zero rewrites. Full toolchain support: Hardhat, Foundry, ethers.js.',
+    metric: '100%',
+    metricLabel: 'evm compat.',
+  },
+  {
+    id: 'cap-gas',
+    code: 'GAS',
+    title: 'Predictable Fees',
+    detail: 'No EIP-1559 volatility spikes. Flat-rate gas model with optional fee delegation for dApp users.',
+    metric: '<$0.01',
+    metricLabel: 'avg tx fee',
   },
 ]
 
 export default function FeaturesGrid() {
   return (
-    <section id="ecosystem" className="py-24 px-6 md:px-16 bg-black">
-      <div className="max-w-6xl mx-auto">
-        {/* Header */}
-        <div className="flex flex-col items-center text-center mb-16">
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            whileInView={{ opacity: 1, y: 0 }}
-            viewport={{ once: true }}
-            transition={{ duration: 0.5 }}
-            className="liquid-glass rounded-full px-3.5 py-1 mb-6"
-            id="features-grid-badge"
-          >
-            <span className="text-xs font-medium text-white font-body tracking-wider uppercase">
-              Why ChainForge
-            </span>
-          </motion.div>
+    <section
+      id="ecosystem"
+      style={{ background: 'var(--bg-raised)', borderTop: '1px solid rgba(255,255,255,0.06)' }}
+    >
+      {/* Header bar */}
+      <div
+        className="flex items-center justify-between px-6 lg:px-12 py-4"
+        style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}
+      >
+        <span className="mono-amber">// WHY CHAINFORGE</span>
+        <span className="mono">6 MODULES</span>
+      </div>
 
-          <BlurText
-            text="The edge is everything."
-            className="text-4xl md:text-5xl lg:text-6xl font-heading italic text-white tracking-tight leading-[0.9]"
-            delay={70}
-            splitBy="words"
-          />
-        </div>
+      {/* 2-column capability list */}
+      <div className="max-w-7xl mx-auto px-6 lg:px-12 py-12">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-0 divide-y lg:divide-y-0"
+          style={{ borderColor: 'rgba(255,255,255,0.06)' }}
+        >
+          {/* Left column */}
+          <div className="flex flex-col lg:pr-12 lg:border-r" style={{ borderColor: 'rgba(255,255,255,0.06)' }}>
+            {capabilities.slice(0, 3).map((cap, i) => (
+              <FadeUp key={cap.id} delay={i * 0.08}>
+                <div
+                  id={cap.id}
+                  className="group flex items-start gap-6 py-6 border-b cursor-default"
+                  style={{ borderColor: 'rgba(255,255,255,0.06)' }}
+                >
+                  {/* Code tag */}
+                  <div
+                    className="flex-shrink-0 font-mono-custom font-bold text-xs py-1 px-2 mt-1"
+                    style={{ background: 'var(--amber-dim)', color: 'var(--amber)', border: '1px solid var(--amber-border)', minWidth: '44px', textAlign: 'center' }}
+                  >
+                    {cap.code}
+                  </div>
 
-        {/* Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-          {features.map((feature, i) => (
-            <motion.div
-              key={feature.id}
-              id={feature.id}
-              initial={{ opacity: 0, y: 30 }}
-              whileInView={{ opacity: 1, y: 0 }}
-              viewport={{ once: true }}
-              transition={{ duration: 0.5, delay: i * 0.1 }}
-              className="liquid-glass rounded-2xl p-6 flex flex-col gap-4 group hover:scale-[1.02] transition-transform duration-300"
-            >
-              {/* Icon */}
-              <div className="liquid-glass-strong rounded-full w-10 h-10 flex items-center justify-center flex-shrink-0">
-                <feature.icon
-                  size={18}
-                  className="text-neon group-hover:scale-110 transition-transform duration-200"
-                />
-              </div>
+                  {/* Content */}
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-start justify-between gap-4 mb-2">
+                      <h3 className="font-heading font-semibold text-white text-base group-hover:text-amber transition-colors" style={{ '--tw-text-opacity': '1' } as any}>
+                        {cap.title}
+                      </h3>
+                      <div className="text-right flex-shrink-0">
+                        <div className="font-mono-custom font-bold text-base" style={{ color: 'var(--amber)' }}>
+                          {cap.metric}
+                        </div>
+                        <div className="mono" style={{ fontSize: '9px' }}>{cap.metricLabel}</div>
+                      </div>
+                    </div>
+                    <p className="font-heading font-light text-xs leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
+                      {cap.detail}
+                    </p>
+                  </div>
+                </div>
+              </FadeUp>
+            ))}
+          </div>
 
-              {/* Title */}
-              <h3 className="text-white font-body font-semibold text-base leading-tight">
-                {feature.title}
-              </h3>
-
-              {/* Body */}
-              <p className="text-white/50 font-body font-light text-sm leading-relaxed">
-                {feature.body}
-              </p>
-
-              {/* Bottom neon line */}
-              <div
-                className="h-px w-0 group-hover:w-full transition-all duration-500"
-                style={{ background: 'linear-gradient(90deg, rgba(0,229,255,0.5), transparent)' }}
-              />
-            </motion.div>
-          ))}
+          {/* Right column */}
+          <div className="flex flex-col lg:pl-12">
+            {capabilities.slice(3).map((cap, i) => (
+              <FadeUp key={cap.id} delay={(i + 3) * 0.08}>
+                <div
+                  id={cap.id}
+                  className="group flex items-start gap-6 py-6 border-b cursor-default"
+                  style={{ borderColor: 'rgba(255,255,255,0.06)' }}
+                >
+                  <div
+                    className="flex-shrink-0 font-mono-custom font-bold text-xs py-1 px-2 mt-1"
+                    style={{ background: 'var(--amber-dim)', color: 'var(--amber)', border: '1px solid var(--amber-border)', minWidth: '44px', textAlign: 'center' }}
+                  >
+                    {cap.code}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-start justify-between gap-4 mb-2">
+                      <h3 className="font-heading font-semibold text-white text-base">
+                        {cap.title}
+                      </h3>
+                      <div className="text-right flex-shrink-0">
+                        <div className="font-mono-custom font-bold text-base" style={{ color: 'var(--amber)' }}>
+                          {cap.metric}
+                        </div>
+                        <div className="mono" style={{ fontSize: '9px' }}>{cap.metricLabel}</div>
+                      </div>
+                    </div>
+                    <p className="font-heading font-light text-xs leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
+                      {cap.detail}
+                    </p>
+                  </div>
+                </div>
+              </FadeUp>
+            ))}
+          </div>
         </div>
       </div>
     </section>
