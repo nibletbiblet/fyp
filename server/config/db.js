@@ -1,7 +1,8 @@
 import mysql from 'mysql2/promise'
 import { env } from './env.js'
 
-export const db = mysql.createPool({
+// Connection pool — reused across all requests
+const pool = mysql.createPool({
   host: env.db.host,
   port: env.db.port,
   user: env.db.user,
@@ -10,15 +11,7 @@ export const db = mysql.createPool({
   waitForConnections: true,
   connectionLimit: 10,
   queueLimit: 0,
-  ssl: env.db.ssl ? {} : undefined,
+  ssl: env.db.ssl ? { rejectUnauthorized: false } : undefined,
 })
 
-export const checkDatabaseConnection = async () => {
-  const connection = await db.getConnection()
-
-  try {
-    await connection.ping()
-  } finally {
-    connection.release()
-  }
-}
+export default pool

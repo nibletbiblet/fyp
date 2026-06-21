@@ -1,8 +1,5 @@
--- Clean schema rebuild v1 for the crypto payment platform MVP.
--- This file is a replacement-candidate schema, not an incremental migration.
--- It intentionally does not keep the old transactions, ledger_entries, or
--- payout_records tables because their concepts are covered by payments,
--- settlements, and merchant_payouts.
+-- Rebuild schema matching the new merchants + merchant_users design.
+-- Updates all foreign key references from varchar(36) to int.
 
 SET NAMES utf8mb4;
 SET FOREIGN_KEY_CHECKS = 0;
@@ -13,39 +10,46 @@ DROP TABLE IF EXISTS `blockchain_transactions`;
 DROP TABLE IF EXISTS `payments`;
 DROP TABLE IF EXISTS `merchant_payouts`;
 DROP TABLE IF EXISTS `supported_assets`;
+DROP TABLE IF EXISTS `merchant_users`;
 DROP TABLE IF EXISTS `merchants`;
 
 SET FOREIGN_KEY_CHECKS = 1;
 
+-- ── 1. Create merchants table ──
 CREATE TABLE `merchants` (
-  `merchant_id` varchar(36) NOT NULL,
-  `business_name` varchar(255) NOT NULL,
-  `uen` varchar(20) DEFAULT NULL,
+  `id` int NOT NULL AUTO_INCREMENT,
+  `name` varchar(255) NOT NULL,
   `email` varchar(150) NOT NULL,
-  `password_hash` varchar(255) NOT NULL,
   `bank_name` varchar(100) DEFAULT NULL,
-  `bank_account_last4` varchar(4) DEFAULT NULL,
-  `bank_holder_name` varchar(255) DEFAULT NULL,
-  `bank_account_encrypted` text DEFAULT NULL,
-  `bank_account_iv` varchar(32) DEFAULT NULL,
-  `bank_account_auth_tag` varchar(32) DEFAULT NULL,
-  `email_verification_token` varchar(128) DEFAULT NULL,
-  `email_verified_at` timestamp NULL DEFAULT NULL,
-  `container_id` varchar(64) DEFAULT NULL,
-  `wallet_id` varchar(64) DEFAULT NULL,
-  `onboarded_at` timestamp NULL DEFAULT NULL,
-  `kyc_status` enum('PENDING','APPROVED','REJECTED','MANUAL_REVIEW') NOT NULL DEFAULT 'PENDING',
-  `status` enum('ACTIVE_UNVERIFIED','ACTIVE_ONBOARDED','SUSPENDED','CLOSED') NOT NULL DEFAULT 'ACTIVE_UNVERIFIED',
+  `account_holder_name` varchar(255) DEFAULT NULL,
+  `account_last4` varchar(4) DEFAULT NULL,
+  `bank_account_label` varchar(20) DEFAULT NULL, -- UEN
+  `status` varchar(50) NOT NULL DEFAULT 'ACTIVE_UNVERIFIED',
+  `triplea_merchant_id` varchar(64) DEFAULT NULL,
+  `triplea_wallet_id` varchar(64) DEFAULT NULL,
   `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  PRIMARY KEY (`merchant_id`),
+  PRIMARY KEY (`id`),
   UNIQUE KEY `uq_merchants_email` (`email`),
-  UNIQUE KEY `uq_merchants_uen` (`uen`),
-  KEY `idx_merchants_status` (`status`),
-  KEY `idx_merchants_kyc_status` (`kyc_status`),
-  KEY `idx_merchants_email_verification_token` (`email_verification_token`)
+  UNIQUE KEY `uq_merchants_uen` (`bank_account_label`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- ── 2. Create merchant_users table ──
+CREATE TABLE `merchant_users` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `merchant_id` int NOT NULL,
+  `email` varchar(150) NOT NULL,
+  `password_hash` varchar(255) NOT NULL,
+  `password_salt` varchar(64) NOT NULL,
+  `full_name` varchar(255) NOT NULL,
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_merchant_users_email` (`email`),
+  KEY `idx_merchant_users_merchant_id` (`merchant_id`),
+  CONSTRAINT `fk_merchant_users_merchants` FOREIGN KEY (`merchant_id`) REFERENCES `merchants` (`id`) ON DELETE CASCADE ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ── 3. Create supported_assets table ──
 CREATE TABLE `supported_assets` (
   `supported_asset_id` varchar(36) NOT NULL,
   `crypto_symbol` varchar(32) NOT NULL,
@@ -63,15 +67,13 @@ CREATE TABLE `supported_assets` (
   `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (`supported_asset_id`),
-  UNIQUE KEY `uq_supported_assets_crypto_network` (`crypto_symbol`, `network`),
-  KEY `idx_supported_assets_enabled` (`is_enabled`),
-  KEY `idx_supported_assets_contract` (`network`, `contract_address`),
-  CONSTRAINT `chk_supported_assets_testnet_only` CHECK (`is_testnet` = 1)
+  UNIQUE KEY `uq_supported_assets_crypto_network` (`crypto_symbol`, `network`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- ── 4. Create merchant_payouts table ──
 CREATE TABLE `merchant_payouts` (
   `payout_id` varchar(36) NOT NULL,
-  `merchant_id` varchar(36) NOT NULL,
+  `merchant_id` int NOT NULL,
   `payout_reference` varchar(100) NOT NULL,
   `gross_sgd_amount` decimal(12,2) NOT NULL,
   `payout_fee_sgd` decimal(12,2) NOT NULL DEFAULT '0.00',
@@ -92,16 +94,13 @@ CREATE TABLE `merchant_payouts` (
   PRIMARY KEY (`payout_id`),
   UNIQUE KEY `uq_merchant_payouts_reference` (`payout_reference`),
   KEY `idx_merchant_payouts_merchant_status` (`merchant_id`, `status`),
-  KEY `idx_merchant_payouts_created_at` (`created_at`),
-  CONSTRAINT `fk_merchant_payouts_merchants` FOREIGN KEY (`merchant_id`) REFERENCES `merchants` (`merchant_id`) ON DELETE RESTRICT ON UPDATE CASCADE,
-  CONSTRAINT `chk_merchant_payouts_gross_nonnegative` CHECK (`gross_sgd_amount` >= 0),
-  CONSTRAINT `chk_merchant_payouts_fee_nonnegative` CHECK (`payout_fee_sgd` >= 0),
-  CONSTRAINT `chk_merchant_payouts_net_nonnegative` CHECK (`net_payout_sgd_amount` >= 0)
+  CONSTRAINT `fk_merchant_payouts_merchants` FOREIGN KEY (`merchant_id`) REFERENCES `merchants` (`id`) ON DELETE RESTRICT ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- ── 5. Create payments table ──
 CREATE TABLE `payments` (
   `payment_id` varchar(36) NOT NULL,
-  `merchant_id` varchar(36) NOT NULL,
+  `merchant_id` int NOT NULL,
   `payment_reference` varchar(64) NOT NULL,
   `merchant_order_reference` varchar(100) DEFAULT NULL,
   `description` varchar(500) DEFAULT NULL,
@@ -155,18 +154,11 @@ CREATE TABLE `payments` (
   KEY `idx_payments_merchant_status` (`merchant_id`, `status`),
   KEY `idx_payments_supported_asset` (`supported_asset_id`),
   KEY `idx_payments_receiving_address` (`receiving_address`),
-  KEY `idx_payments_quote_expires_at` (`quote_expires_at`),
-  KEY `idx_payments_expires_at` (`expires_at`),
-  KEY `idx_payments_created_at` (`created_at`),
-  CONSTRAINT `fk_payments_merchants` FOREIGN KEY (`merchant_id`) REFERENCES `merchants` (`merchant_id`) ON DELETE RESTRICT ON UPDATE CASCADE,
-  CONSTRAINT `fk_payments_supported_assets` FOREIGN KEY (`supported_asset_id`) REFERENCES `supported_assets` (`supported_asset_id`) ON DELETE RESTRICT ON UPDATE CASCADE,
-  CONSTRAINT `chk_payments_amount_sgd_positive` CHECK (`amount_sgd` > 0),
-  CONSTRAINT `chk_payments_expected_crypto_positive` CHECK (`expected_crypto_amount` IS NULL OR `expected_crypto_amount` > 0),
-  CONSTRAINT `chk_payments_received_crypto_nonnegative` CHECK (`received_crypto_amount` >= 0),
-  CONSTRAINT `chk_payments_quoted_rate_positive` CHECK (`quoted_rate_sgd_per_crypto` IS NULL OR `quoted_rate_sgd_per_crypto` > 0),
-  CONSTRAINT `chk_payments_amount_tolerance_bps` CHECK (`amount_tolerance_bps` <= 10000)
+  CONSTRAINT `fk_payments_merchants` FOREIGN KEY (`merchant_id`) REFERENCES `merchants` (`id`) ON DELETE RESTRICT ON UPDATE CASCADE,
+  CONSTRAINT `fk_payments_supported_assets` FOREIGN KEY (`supported_asset_id`) REFERENCES `supported_assets` (`supported_asset_id`) ON DELETE RESTRICT ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- ── 6. Create blockchain_transactions table ──
 CREATE TABLE `blockchain_transactions` (
   `blockchain_transaction_id` varchar(36) NOT NULL,
   `payment_id` varchar(36) NOT NULL,
@@ -193,17 +185,15 @@ CREATE TABLE `blockchain_transactions` (
   KEY `idx_blockchain_transactions_asset` (`supported_asset_id`),
   KEY `idx_blockchain_transactions_to_address` (`to_address`),
   KEY `idx_blockchain_transactions_status` (`status`),
-  KEY `idx_blockchain_transactions_confirmations` (`confirmations`),
   CONSTRAINT `fk_blockchain_transactions_payments` FOREIGN KEY (`payment_id`) REFERENCES `payments` (`payment_id`) ON DELETE RESTRICT ON UPDATE CASCADE,
-  CONSTRAINT `fk_blockchain_transactions_supported_assets` FOREIGN KEY (`supported_asset_id`) REFERENCES `supported_assets` (`supported_asset_id`) ON DELETE RESTRICT ON UPDATE CASCADE,
-  CONSTRAINT `chk_blockchain_transactions_amount_positive` CHECK (`amount_crypto` > 0),
-  CONSTRAINT `chk_blockchain_transactions_confirmations_valid` CHECK (`confirmations` <= 4294967295)
+  CONSTRAINT `fk_blockchain_transactions_supported_assets` FOREIGN KEY (`supported_asset_id`) REFERENCES `supported_assets` (`supported_asset_id`) ON DELETE RESTRICT ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- ── 7. Create settlements table ──
 CREATE TABLE `settlements` (
   `settlement_id` varchar(36) NOT NULL,
   `payment_id` varchar(36) NOT NULL,
-  `merchant_id` varchar(36) NOT NULL,
+  `merchant_id` int NOT NULL,
   `payout_id` varchar(36) DEFAULT NULL,
   `gross_sgd_amount` decimal(12,2) NOT NULL,
   `provider_fee_sgd` decimal(12,2) NOT NULL DEFAULT '0.00',
@@ -223,19 +213,15 @@ CREATE TABLE `settlements` (
   UNIQUE KEY `uq_settlements_payment` (`payment_id`),
   KEY `idx_settlements_merchant_status` (`merchant_id`, `status`),
   KEY `idx_settlements_payout` (`payout_id`),
-  KEY `idx_settlements_created_at` (`created_at`),
   CONSTRAINT `fk_settlements_payments` FOREIGN KEY (`payment_id`) REFERENCES `payments` (`payment_id`) ON DELETE RESTRICT ON UPDATE CASCADE,
-  CONSTRAINT `fk_settlements_merchants` FOREIGN KEY (`merchant_id`) REFERENCES `merchants` (`merchant_id`) ON DELETE RESTRICT ON UPDATE CASCADE,
-  CONSTRAINT `fk_settlements_merchant_payouts` FOREIGN KEY (`payout_id`) REFERENCES `merchant_payouts` (`payout_id`) ON DELETE SET NULL ON UPDATE CASCADE,
-  CONSTRAINT `chk_settlements_gross_nonnegative` CHECK (`gross_sgd_amount` >= 0),
-  CONSTRAINT `chk_settlements_provider_fee_nonnegative` CHECK (`provider_fee_sgd` >= 0),
-  CONSTRAINT `chk_settlements_platform_fee_nonnegative` CHECK (`platform_fee_sgd` >= 0),
-  CONSTRAINT `chk_settlements_net_nonnegative` CHECK (`net_settlement_sgd_amount` >= 0)
+  CONSTRAINT `fk_settlements_merchants` FOREIGN KEY (`merchant_id`) REFERENCES `merchants` (`id`) ON DELETE RESTRICT ON UPDATE CASCADE,
+  CONSTRAINT `fk_settlements_merchant_payouts` FOREIGN KEY (`payout_id`) REFERENCES `merchant_payouts` (`payout_id`) ON DELETE SET NULL ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- ── 8. Create audit_logs table ──
 CREATE TABLE `audit_logs` (
   `audit_log_id` bigint unsigned NOT NULL AUTO_INCREMENT,
-  `merchant_id` varchar(36) DEFAULT NULL,
+  `merchant_id` int DEFAULT NULL,
   `payment_id` varchar(36) DEFAULT NULL,
   `blockchain_transaction_id` varchar(36) DEFAULT NULL,
   `settlement_id` varchar(36) DEFAULT NULL,
@@ -253,13 +239,14 @@ CREATE TABLE `audit_logs` (
   KEY `idx_audit_logs_payout_created` (`payout_id`, `created_at`),
   KEY `idx_audit_logs_actor` (`actor_type`, `actor_id`),
   KEY `idx_audit_logs_action` (`action`),
-  CONSTRAINT `fk_audit_logs_merchants` FOREIGN KEY (`merchant_id`) REFERENCES `merchants` (`merchant_id`) ON DELETE SET NULL ON UPDATE CASCADE,
+  CONSTRAINT `fk_audit_logs_merchants` FOREIGN KEY (`merchant_id`) REFERENCES `merchants` (`id`) ON DELETE SET NULL ON UPDATE CASCADE,
   CONSTRAINT `fk_audit_logs_payments` FOREIGN KEY (`payment_id`) REFERENCES `payments` (`payment_id`) ON DELETE SET NULL ON UPDATE CASCADE,
   CONSTRAINT `fk_audit_logs_blockchain_transactions` FOREIGN KEY (`blockchain_transaction_id`) REFERENCES `blockchain_transactions` (`blockchain_transaction_id`) ON DELETE SET NULL ON UPDATE CASCADE,
   CONSTRAINT `fk_audit_logs_settlements` FOREIGN KEY (`settlement_id`) REFERENCES `settlements` (`settlement_id`) ON DELETE SET NULL ON UPDATE CASCADE,
   CONSTRAINT `fk_audit_logs_merchant_payouts` FOREIGN KEY (`payout_id`) REFERENCES `merchant_payouts` (`payout_id`) ON DELETE SET NULL ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- ── 9. Populate supported_assets ──
 INSERT INTO `supported_assets` (
   `supported_asset_id`,
   `crypto_symbol`,

@@ -1,0 +1,48 @@
+<%- include("partials-header") %>
+
+<div class="container py-5">
+  <h2 class="fw-bold mb-4">Transaction Records</h2>
+
+  <div class="card">
+    <div class="card-body table-responsive">
+      <table class="table table-hover align-middle">
+        <thead>
+          <tr>
+            <th>Created</th>
+            <th>Reference</th>
+            <th>Merchant</th>
+            <th>Customer</th>
+            <th>SGD Amount</th>
+            <th>Crypto Amount</th>
+            <th>Fees</th>
+            <th>Net Settlement</th>
+            <th>Network</th>
+            <th>Payment</th>
+            <th>Settlement</th>
+            <th>Expires</th>
+          </tr>
+        </thead>
+        <tbody>
+          <% payments.forEach(payment => { %>
+            <tr>
+              <td><%= payment.createdAt %></td>
+              <td><%= payment.reference %></td>
+              <td><%= payment.merchantName %></td>
+              <td><%= payment.customerName %></td>
+              <td>SGD <%= payment.fiatAmount.toFixed(2) %></td>
+              <td><%= payment.cryptoAmount %> <%= payment.cryptoCurrency %></td>
+              <td>SGD <%= (payment.processorFee + payment.networkFee).toFixed(2) %></td>
+              <td>SGD <%= payment.netSettlementAmount.toFixed(2) %></td>
+              <td><%= payment.network %></td>
+              <td><span class="badge bg-<%= payment.paymentStatus === 'PAID' ? 'success' : payment.paymentStatus === 'EXPIRED' || payment.paymentStatus === 'FAILED' ? 'danger' : 'warning' %>"><%= payment.paymentStatus %></span></td>
+              <td><span class="badge bg-<%= payment.settlementStatus === 'SETTLED_TO_MERCHANT_SGD' ? 'success' : 'secondary' %>"><%= payment.settlementStatus %></span></td>
+              <td><%= payment.expiresAt || "-" %></td>
+            </tr>
+          <% }) %>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<%- include("partials-footer") %>

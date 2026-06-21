@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { motion, AnimatePresence } from 'motion/react'
+import { Link } from 'react-router-dom'
 import logoIcon from '../assets/logo-icon.png'
 
 // Live block ticker data
@@ -109,13 +110,13 @@ export default function Navbar() {
               #{blockHeight.toLocaleString()}
             </span>
           </div>
-          <a
-            href="#cta"
+          <Link
+            to="/register"
             id="nav-launch"
             className="btn-primary text-[11px] py-2 px-5"
           >
-            Launch App
-          </a>
+            Register / Login
+          </Link>
           {/* Mobile toggle */}
           <button
             className="md:hidden text-white/60 hover:text-white"
@@ -171,9 +172,9 @@ export default function Navbar() {
                   {link.label}
                 </a>
               ))}
-              <a href="#cta" className="btn-primary mt-4 justify-center" onClick={() => setMobileOpen(false)}>
-                Launch App
-              </a>
+              <Link to="/register" className="btn-primary mt-4 justify-center" onClick={() => setMobileOpen(false)}>
+                Register / Login
+              </Link>
             </div>
           </motion.div>
         )}

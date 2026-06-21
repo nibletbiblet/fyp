@@ -1,5 +1,6 @@
 import { motion } from 'motion/react'
 import { ArrowRight, ExternalLink } from 'lucide-react'
+import { Link } from 'react-router-dom'
 import { FadeUp } from './Animations'
 
 const hashAddress = '0x71C7656EC7ab88b098defB751B7401B5f6d8976F'
@@ -138,9 +139,9 @@ export default function Hero() {
 
           {/* CTAs */}
           <FadeUp delay={0.5} className="flex items-center gap-4 lg:col-span-1 lg:justify-center">
-            <a href="#cta" id="hero-cta-primary" className="btn-primary">
-              Launch App <ArrowRight size={14} />
-            </a>
+            <Link to="/register" id="hero-cta-primary" className="btn-primary">
+              Register / Login <ArrowRight size={14} />
+            </Link>
             <a href="#protocol" id="hero-cta-secondary" className="btn-ghost">
               Read Docs <ExternalLink size={12} />
             </a>

@@ -1,0 +1,34 @@
+<%- include("partials-header") %>
+
+<div class="container py-5">
+  <h2 class="fw-bold mb-4">Webhook Event Audit Log</h2>
+
+  <div class="card">
+    <div class="card-body table-responsive">
+      <table class="table table-hover align-middle">
+        <thead>
+          <tr>
+            <th>Received</th>
+            <th>Event</th>
+            <th>Reference</th>
+            <th>Merchant</th>
+            <th>Payload</th>
+          </tr>
+        </thead>
+        <tbody>
+          <% events.forEach(event => { %>
+            <tr>
+              <td><%= event.receivedAt %></td>
+              <td><span class="badge bg-dark"><%= event.eventType %></span></td>
+              <td><%= event.reference %></td>
+              <td><%= event.merchantName %></td>
+              <td><code class="payload-code"><%= event.payload %></code></td>
+            </tr>
+          <% }) %>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<%- include("partials-footer") %>

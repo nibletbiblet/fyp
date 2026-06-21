@@ -1,0 +1,32 @@
+<%- include("partials-header") %>
+
+<div class="container py-5">
+  <div class="row justify-content-center">
+    <div class="col-md-5">
+      <div class="card shadow-sm">
+        <div class="card-body p-4">
+          <h2 class="fw-bold mb-3">Merchant Login</h2>
+          <% if (error) { %>
+            <div class="alert alert-danger"><%= error %></div>
+          <% } %>
+
+          <form method="POST" action="/login">
+            <div class="mb-3">
+              <label class="form-label">Email</label>
+              <input class="form-control" type="email" name="email" value="merchant@uniweb.test" required>
+            </div>
+
+            <div class="mb-4">
+              <label class="form-label">Password</label>
+              <input class="form-control" type="password" name="password" value="password123" required>
+            </div>
+
+            <button class="btn btn-primary w-100">Login</button>
+          </form>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<%- include("partials-footer") %>

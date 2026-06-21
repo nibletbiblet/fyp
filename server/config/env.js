@@ -24,4 +24,6 @@ export const env = {
   btcTestnet: {
     apiBaseUrl: process.env.BTC_TESTNET_API_BASE_URL ?? 'https://mempool.space/testnet/api',
   },
+  jwtSecret: process.env.JWT_SECRET ?? 'dev-jwt-secret-change-in-production',
+  encryptionKey: process.env.ENCRYPTION_KEY ?? '0000000000000000000000000000000000000000000000000000000000000000',
 }
