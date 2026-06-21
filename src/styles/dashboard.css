@@ -530,3 +530,45 @@
     transform: translateY(0);
   }
 }
+
+/* ── Stat Card Flash Animations ── */
+.stat-card-flash-green {
+  animation: dash-flash-green 1.5s ease-out;
+}
+
+.stat-card-flash-amber {
+  animation: dash-flash-amber 1.5s ease-out;
+}
+
+@keyframes dash-flash-green {
+  0% { border-color: #22c55e; box-shadow: 0 0 20px rgba(34,197,94,0.25); }
+  100% { border-color: rgba(255,255,255,0.06); box-shadow: none; }
+}
+
+@keyframes dash-flash-amber {
+  0% { border-color: #f0a500; box-shadow: 0 0 20px rgba(240,165,0,0.25); }
+  100% { border-color: rgba(255,255,255,0.06); box-shadow: none; }
+}
+
+/* ── Toast Notifications ── */
+@keyframes dash-toast-in {
+  from {
+    opacity: 0;
+    transform: translateX(40px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+/* ── Additional Status Badges ── */
+.status-badge.confirming {
+  background: rgba(59, 130, 246, 0.1);
+  color: #3b82f6;
+}
+
+.status-badge.detecting {
+  background: rgba(168, 85, 247, 0.1);
+  color: #a855f7;
+}
