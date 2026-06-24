@@ -5,6 +5,7 @@ import pool from '../config/db.js'
 import { encryptBankDetails } from '../utils/encryption.js'
 
 const SALT_ROUNDS = 10
+const DUMMY_PASSWORD_HASH = '$2b$10$C6UzMDM.H6dfI/f/IKcEeO15D/MH6fiHvo4G7Yx1uUymRETrx2rga'
 
 /**
  * Registers a new merchant.
@@ -28,6 +29,8 @@ export async function createMerchant({
 }) {
   const conn = await pool.getConnection()
   try {
+    await conn.beginTransaction()
+
     // 1. Check uniqueness
     const [existingEmail] = await conn.query(
       'SELECT merchant_id FROM merchants WHERE email = ?',
@@ -81,7 +84,11 @@ export async function createMerchant({
       [merchantId, merchantId, JSON.stringify({ email, businessName })]
     )
 
+    await conn.commit()
     return { merchantId, verificationToken }
+  } catch (err) {
+    await conn.rollback()
+    throw err
   } finally {
     conn.release()
   }
@@ -158,7 +165,7 @@ export async function authenticateMerchant(email, password) {
   )
   if (rows.length === 0) {
     // Still run bcrypt compare to prevent timing attacks
-    await bcrypt.compare(password, '$2b$10$invalidhashforthisaccount000000000000000000000')
+    await bcrypt.compare(password, DUMMY_PASSWORD_HASH)
     throw Object.assign(new Error('Invalid credentials'), { code: 'INVALID_CREDENTIALS' })
   }
 

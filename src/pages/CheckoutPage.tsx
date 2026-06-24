@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import OnboardingLayout from '../components/onboarding/OnboardingLayout'
 
@@ -73,10 +73,8 @@ export default function CheckoutPage() {
   const [errorMsg, setErrorMsg] = useState('')
   const [simulating, setSimulating] = useState(false)
   const [simPhase, setSimPhase] = useState<'idle' | 'signing' | 'broadcasting' | 'done'>('idle')
-  const [prevStatus, setPrevStatus] = useState('')
   const [statusChanged, setStatusChanged] = useState(false)
   const [showCelebration, setShowCelebration] = useState(false)
-  const prevStatusRef = useRef('')
 
   useEffect(() => {
     ensureStyles()
@@ -100,7 +98,6 @@ export default function CheckoutPage() {
 
           if (oldStatus && oldStatus !== newStatus) {
             setStatusChanged(true)
-            setPrevStatus(oldStatus)
             setTimeout(() => setStatusChanged(false), 1200)
 
             // Trigger celebration on SETTLED
@@ -108,7 +105,6 @@ export default function CheckoutPage() {
               setShowCelebration(true)
             }
           }
-          prevStatusRef.current = newStatus
           return data.payment
         })
         setTransactions(data.transactions)
@@ -214,6 +210,9 @@ export default function CheckoutPage() {
   const currentStepIdx = getStepIndex(payment.status)
   const isTerminal = payment.status === 'SETTLED'
   const sc = statusColor(payment.status)
+  const latestTx = transactions[0]
+  const requiredConfirmations = latestTx ? Number(latestTx.required_confirmations || 1) : 1
+  const isLatestTxConfirmed = latestTx ? Number(latestTx.confirmations) >= requiredConfirmations : false
 
   return (
     <OnboardingLayout showSteps={false}>
@@ -610,8 +609,6 @@ export default function CheckoutPage() {
                     {PIPELINE_STEPS.map((step, i) => {
                       const isCompleted = currentStepIdx > i
                       const isCurrent = currentStepIdx === i
-                      const isUpcoming = currentStepIdx < i
-
                       return (
                         <div key={step.key} style={{
                           display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8,
@@ -677,22 +674,22 @@ export default function CheckoutPage() {
                         <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 10 }}>
                           <span style={{ color: 'rgba(255,255,255,0.4)' }}>Tx Hash:</span>
                           <span style={{ color: '#f5f5f0' }}>
-                            {transactions[0].tx_hash.slice(0, 8)}...{transactions[0].tx_hash.slice(-8)}
+                            {latestTx.tx_hash.slice(0, 8)}...{latestTx.tx_hash.slice(-8)}
                           </span>
                         </div>
                         <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 10 }}>
                           <span style={{ color: 'rgba(255,255,255,0.4)' }}>Confirmations:</span>
                           <span style={{
-                            color: transactions[0].confirmations >= 2 ? '#22c55e' : '#f0a500',
+                            color: isLatestTxConfirmed ? '#22c55e' : '#f0a500',
                             transition: 'color 0.4s ease',
                           }}>
-                            {transactions[0].confirmations}/2 {transactions[0].confirmations >= 2 ? '(Confirmed ✓)' : '(Pending...)'}
+                            {latestTx.confirmations}/{requiredConfirmations} {isLatestTxConfirmed ? '(Confirmed ✓)' : '(Pending...)'}
                           </span>
                         </div>
                         <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 10 }}>
                           <span style={{ color: 'rgba(255,255,255,0.4)' }}>Amount:</span>
                           <span style={{ color: '#f5f5f0' }}>
-                            {Number(transactions[0].amount_crypto).toFixed(6)} {payment.crypto_symbol_snapshot}
+                            {Number(latestTx.amount_crypto).toFixed(6)} {payment.crypto_symbol_snapshot}
                           </span>
                         </div>
                       </>

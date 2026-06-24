@@ -40,11 +40,6 @@ export default function BlurText({
       ? { filter: 'blur(10px)', opacity: 0, y: 50 }
       : { filter: 'blur(10px)', opacity: 0, y: -50 }
 
-  const mid =
-    direction === 'bottom'
-      ? { filter: 'blur(5px)', opacity: 0.5, y: -5 }
-      : { filter: 'blur(5px)', opacity: 0.5, y: 5 }
-
   const final = { filter: 'blur(0px)', opacity: 1, y: 0 }
 
   return (

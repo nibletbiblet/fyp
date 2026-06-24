@@ -1,4 +1,3 @@
-import { motion } from 'motion/react'
 import { FadeUp } from './Animations'
 
 const capabilities = [

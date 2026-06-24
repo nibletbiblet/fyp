@@ -84,14 +84,15 @@ export default function RegisterPage() {
       const res = await fetch('/api/auth/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify({
-          name: businessName,
+          businessName,
           uen,
           email,
           password,
           bankName,
-          accountHolderName: bankHolderName,
-          accountNo: bankAccountNumber,
+          bankHolderName,
+          bankAccountNumber,
         }),
       })
       const data = await res.json()
@@ -103,6 +104,7 @@ export default function RegisterPage() {
       sessionStorage.setItem('registration', JSON.stringify({
         email,
         merchantId: data.merchantId,
+        verificationToken: data.verificationToken,
         verificationUrl: data.verificationUrl,
       }))
       navigate('/check-email')

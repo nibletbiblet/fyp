@@ -27,6 +27,7 @@ export default function CheckEmailPage() {
       const res = await fetch('/api/auth/resend-verification', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify({ email: registration.email }),
       })
       const data = await res.json()

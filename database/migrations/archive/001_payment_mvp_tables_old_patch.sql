@@ -1,3 +1,7 @@
+-- ARCHIVED / SUPERSEDED OLD PATCH: do not apply.
+-- This incremental patch was based on the old transactions/ledger schema.
+-- Its intended concepts are already represented in database/schema.sql.
+
 -- Migration: 001_payment_mvp_tables
 -- Purpose: Add the crypto payment MVP schema without overwriting database/schema.sql.
 -- Notes:

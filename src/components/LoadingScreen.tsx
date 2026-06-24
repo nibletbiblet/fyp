@@ -397,7 +397,7 @@ export default function LoadingScreen({ onComplete }: LoadingScreenProps) {
                     className="inline-block w-2 h-3"
                     style={{ background: 'var(--amber)' }}
                     animate={{ opacity: [1, 0, 1] }}
-                    transition={{ duration: 1, repeat: Infinity, ease: 'steps(1)' }}
+                    transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}
                   />
                 </div>
 

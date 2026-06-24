@@ -1,6 +1,6 @@
 import crypto from 'node:crypto'
 import pool from '../config/db.js'
-import { calculateCryptoAmount, calculateFees } from './paymentProviders/mockConversionProvider.js'
+import { calculateCryptoAmount } from './paymentProviders/mockConversionProvider.js'
 
 /**
  * Creates a new payment request in SGD.
@@ -49,13 +49,15 @@ export async function selectCrypto(paymentId, cryptoSymbol, network) {
 
   // Resolve supported_asset_id from the database
   const [assets] = await pool.query(
-    'SELECT supported_asset_id FROM supported_assets WHERE crypto_symbol = ? AND network = ?',
+    `SELECT supported_asset_id, contract_address
+     FROM supported_assets
+     WHERE crypto_symbol = ? AND network = ? AND is_enabled = 1`,
     [cryptoSymbol, network]
   )
   if (assets.length === 0) {
     throw new Error(`Unsupported crypto currency or network combination: ${cryptoSymbol} on ${network}`)
   }
-  const supportedAssetId = assets[0].supported_asset_id
+  const asset = assets[0]
 
   // Calculate rate and amount
   const { exchangeRate, cryptoAmount } = calculateCryptoAmount(payment.amount_sgd)
@@ -76,11 +78,10 @@ export async function selectCrypto(paymentId, cryptoSymbol, network) {
     qrCodeData = `ethereum:${receivingAddress}?value=${cryptoAmount}`
   } else {
     // Stablecoin ERC-20 token info
-    const contractAddress = '0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238' // Mock tUSDC Sepolia
     qrCodeData = JSON.stringify({
       token: cryptoSymbol,
       network: network,
-      contract: contractAddress,
+      contract: asset.contract_address,
       recipient: receivingAddress,
       amount: cryptoAmount,
       reference: payment.payment_reference
@@ -100,7 +101,7 @@ export async function selectCrypto(paymentId, cryptoSymbol, network) {
          crypto_selected_at = CURRENT_TIMESTAMP
      WHERE payment_id = ?`,
     [
-      supportedAssetId,
+      asset.supported_asset_id,
       cryptoSymbol,
       network,
       cryptoAmount,
@@ -127,7 +128,13 @@ export async function selectCrypto(paymentId, cryptoSymbol, network) {
  * @returns {Promise<object>}
  */
 export async function simulatePaymentBroadcast(paymentId) {
-  const [payments] = await pool.query('SELECT * FROM payments WHERE payment_id = ?', [paymentId])
+  const [payments] = await pool.query(
+    `SELECT p.*, sa.min_confirmations
+     FROM payments p
+     LEFT JOIN supported_assets sa ON sa.supported_asset_id = p.supported_asset_id
+     WHERE p.payment_id = ?`,
+    [paymentId]
+  )
   if (payments.length === 0) {
     throw new Error('Payment not found')
   }
@@ -145,8 +152,9 @@ export async function simulatePaymentBroadcast(paymentId) {
     `INSERT INTO blockchain_transactions (
       blockchain_transaction_id, payment_id, supported_asset_id,
       crypto_symbol_snapshot, network_snapshot, tx_hash,
-      from_address, to_address, amount_crypto, confirmations, status, detected_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'DETECTED', CURRENT_TIMESTAMP)`,
+      from_address, to_address, amount_crypto, confirmations, required_confirmations,
+      status, detected_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 'DETECTED', CURRENT_TIMESTAMP)`,
     [
       blockchainTransactionId,
       paymentId,
@@ -156,7 +164,8 @@ export async function simulatePaymentBroadcast(paymentId) {
       txHash,
       '0x' + crypto.randomBytes(20).toString('hex'), // Mock sender
       payment.receiving_address,
-      payment.expected_crypto_amount
+      payment.expected_crypto_amount,
+      payment.min_confirmations || 1
     ]
   )
 

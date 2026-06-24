@@ -1,8 +1,7 @@
--- Migration: 002_onboarding_schema_v2
--- Creates the merchant_users table and adjusts the merchants table
--- to match the prototype onboarding schema.
---
--- Run this AFTER the base schema has been applied.
+-- ARCHIVED / INCOMPATIBLE: do not apply.
+-- This migration targets an abandoned onboarding design with integer
+-- merchants.id and merchant_users. The approved schema uses merchants.merchant_id
+-- and merchants.password_hash as the single-merchant auth model.
 
 -- ── 1. Adjust merchants table ──
 -- Drop columns that don't exist in the new design
