@@ -1,3 +1,7 @@
+-- ARCHIVED / SUPERSEDED: do not apply.
+-- These onboarding columns and the verification-token index are already
+-- included in the approved baseline database/schema.sql.
+
 -- Migration: 001_onboarding_columns
 -- Adds columns required for the merchant onboarding flow.
 -- Run against an existing database that already has the merchants table.

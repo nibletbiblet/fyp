@@ -43,7 +43,8 @@ async function processPendingPayments() {
 
     for (const tx of txs) {
       const nextConfirmations = tx.confirmations + 1
-      const isConfirmed = nextConfirmations >= 2
+      const requiredConfirmations = Number(tx.required_confirmations) || 1
+      const isConfirmed = nextConfirmations >= requiredConfirmations
 
       if (isConfirmed) {
         // Mark blockchain tx and payment as CONFIRMED (only)
@@ -64,10 +65,14 @@ async function processPendingPayments() {
         await pool.query(
           `INSERT INTO audit_logs (payment_id, merchant_id, actor_type, action, details, created_at)
            VALUES (?, ?, 'SYSTEM', 'PAYMENT_CONFIRMED', ?, CURRENT_TIMESTAMP)`,
-          [tx.payment_id, tx.merchant_id, JSON.stringify({ confirmations: nextConfirmations })]
+          [
+            tx.payment_id,
+            tx.merchant_id,
+            JSON.stringify({ confirmations: nextConfirmations, requiredConfirmations })
+          ]
         )
 
-        console.log(`✅ Payment ${tx.payment_reference} confirmed (${nextConfirmations} confirmations)`)
+        console.log(`✅ Payment ${tx.payment_reference} confirmed (${nextConfirmations}/${requiredConfirmations} confirmations)`)
       } else {
         // Increment confirmation count and set status to CONFIRMING
         await pool.query(
@@ -84,7 +89,7 @@ async function processPendingPayments() {
           [tx.payment_id]
         )
 
-        console.log(`⏳ Payment ${tx.payment_reference} confirmations: ${nextConfirmations}/2`)
+        console.log(`⏳ Payment ${tx.payment_reference} confirmations: ${nextConfirmations}/${requiredConfirmations}`)
       }
     }
 

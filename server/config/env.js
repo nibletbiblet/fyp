@@ -5,6 +5,23 @@ const toInteger = (value, fallback) => {
   return Number.isNaN(parsed) ? fallback : parsed
 }
 
+const required = (name) => {
+  const value = process.env[name]
+  if (!value) {
+    throw new Error(`Missing required environment variable: ${name}`)
+  }
+  return value
+}
+
+const requiredHex = (name, byteLength) => {
+  const value = required(name)
+  const expectedLength = byteLength * 2
+  if (!/^[0-9a-fA-F]+$/.test(value) || value.length !== expectedLength) {
+    throw new Error(`${name} must be a ${expectedLength}-character hex string`)
+  }
+  return value
+}
+
 export const env = {
   nodeEnv: process.env.NODE_ENV ?? 'development',
   port: toInteger(process.env.PORT, 4000),
@@ -24,6 +41,6 @@ export const env = {
   btcTestnet: {
     apiBaseUrl: process.env.BTC_TESTNET_API_BASE_URL ?? 'https://mempool.space/testnet/api',
   },
-  jwtSecret: process.env.JWT_SECRET ?? 'dev-jwt-secret-change-in-production',
-  encryptionKey: process.env.ENCRYPTION_KEY ?? '0000000000000000000000000000000000000000000000000000000000000000',
+  jwtSecret: required('JWT_SECRET'),
+  encryptionKey: requiredHex('ENCRYPTION_KEY', 32),
 }

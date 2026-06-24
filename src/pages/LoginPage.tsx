@@ -29,10 +29,6 @@ export default function LoginPage() {
         return
       }
 
-      // Store token and merchant info
-      localStorage.setItem('token', data.token)
-      localStorage.setItem('merchant', JSON.stringify(data.merchant))
-
       navigate('/dashboard')
     } catch {
       setError('Network error — is the backend running?')

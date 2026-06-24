@@ -20,7 +20,7 @@ interface MerchantProfile {
 
 interface PaymentRecord {
   payment_id: string
-  merchant_id: number
+  merchant_id: string
   payment_reference: string
   description: string | null
   amount_sgd: number
@@ -99,14 +99,14 @@ export default function DashboardPage() {
     }, 5000)
   }
 
-  const fetchDashboardData = async (token: string) => {
+  const fetchDashboardData = async () => {
     try {
       const [statsRes, paymentsRes] = await Promise.all([
         fetch('/api/dashboard/stats', {
-          headers: { Authorization: `Bearer ${token}` }
+          credentials: 'include',
         }),
         fetch('/api/dashboard/payments', {
-          headers: { Authorization: `Bearer ${token}` }
+          credentials: 'include',
         })
       ])
 
@@ -185,20 +185,12 @@ export default function DashboardPage() {
   }
 
   useEffect(() => {
-    const token = localStorage.getItem('token')
-    if (!token) {
-      navigate('/login')
-      return
-    }
-
     const fetchProfile = async () => {
       try {
         const res = await fetch('/api/auth/me', {
-          headers: { Authorization: `Bearer ${token}` },
+          credentials: 'include',
         })
         if (!res.ok) {
-          localStorage.removeItem('token')
-          localStorage.removeItem('merchant')
           navigate('/login')
           return
         }
@@ -206,15 +198,9 @@ export default function DashboardPage() {
         setMerchant(data.merchant)
         
         // Fetch stats + list of payments
-        await fetchDashboardData(token)
+        await fetchDashboardData()
       } catch {
-        // If backend is down, use cached data
-        const cached = localStorage.getItem('merchant')
-        if (cached) {
-          setMerchant(JSON.parse(cached) as MerchantProfile)
-        } else {
-          navigate('/login')
-        }
+        navigate('/login')
       } finally {
         setLoading(false)
       }
@@ -224,7 +210,7 @@ export default function DashboardPage() {
 
     // Poll dashboard stats & lists every 3 seconds
     const interval = setInterval(() => {
-      if (token) fetchDashboardData(token)
+      fetchDashboardData()
     }, 3000)
     return () => clearInterval(interval)
   }, [navigate])
@@ -235,8 +221,6 @@ export default function DashboardPage() {
     } catch {
       // ignore
     }
-    localStorage.removeItem('token')
-    localStorage.removeItem('merchant')
     navigate('/login')
   }
 
@@ -246,16 +230,13 @@ export default function DashboardPage() {
     setModalError('')
     setCreatedLink('')
 
-    const token = localStorage.getItem('token')
-    if (!token) return
-
     try {
       const res = await fetch('/api/payments', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`
         },
+        credentials: 'include',
         body: JSON.stringify({
           amountSgd: Number(amountSgd),
           description
@@ -270,7 +251,7 @@ export default function DashboardPage() {
         setAmountSgd('')
         setDescription('')
         // Refresh payments list immediately
-        fetchDashboardData(token)
+        fetchDashboardData()
       }
     } catch {
       setModalError('Network error — please check if backend is running')

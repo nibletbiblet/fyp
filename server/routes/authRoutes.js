@@ -1,4 +1,5 @@
 import { Router } from 'express'
+import { env } from '../config/env.js'
 import { createToken, authenticateToken } from '../middleware/auth.js'
 import {
   createMerchant,
@@ -9,6 +10,19 @@ import {
 } from '../services/merchantService.js'
 
 const router = Router()
+
+const authCookieOptions = {
+  httpOnly: true,
+  secure: env.nodeEnv === 'production',
+  sameSite: 'lax',
+  maxAge: 24 * 60 * 60 * 1000,
+}
+
+const clearAuthCookieOptions = {
+  httpOnly: true,
+  secure: env.nodeEnv === 'production',
+  sameSite: 'lax',
+}
 
 /**
  * POST /api/auth/register
@@ -103,7 +117,7 @@ router.post('/verify-email', async (req, res) => {
 
 /**
  * POST /api/auth/login
- * Authenticates a merchant and returns a JWT.
+ * Authenticates a merchant and sets the HTTP-only auth cookie.
  */
 router.post('/login', async (req, res) => {
   try {
@@ -115,17 +129,10 @@ router.post('/login', async (req, res) => {
     const merchant = await authenticateMerchant(email, password)
     const token = createToken(merchant.merchantId)
 
-    // Set HTTP-only cookie
-    res.cookie('token', token, {
-      httpOnly: true,
-      secure: false, // set to true in production
-      sameSite: 'lax',
-      maxAge: 24 * 60 * 60 * 1000, // 24 hours
-    })
+    res.cookie('token', token, authCookieOptions)
 
     res.json({
       message: 'Login successful',
-      token,
       merchant: {
         merchantId: merchant.merchantId,
         email: merchant.email,
@@ -190,7 +197,7 @@ router.post('/resend-verification', async (req, res) => {
  * Clears the auth cookie.
  */
 router.post('/logout', (_req, res) => {
-  res.clearCookie('token')
+  res.clearCookie('token', clearAuthCookieOptions)
   res.json({ message: 'Logged out successfully' })
 })
 

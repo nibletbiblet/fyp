@@ -5,7 +5,7 @@ import OnboardingLayout from '../components/onboarding/OnboardingLayout'
 export default function VerifyEmailPage() {
   const [searchParams] = useSearchParams()
   const navigate = useNavigate()
-  const merchantId = searchParams.get('merchantId')
+  const token = searchParams.get('token')
  
   const [phase, setPhase] = useState<'loading' | 'success' | 'error'>('loading')
   const [statusText, setStatusText] = useState('Authenticating token routing profiles and provisioning dedicated Triple-A ledger containers...')
@@ -14,9 +14,9 @@ export default function VerifyEmailPage() {
   const [errorMsg, setErrorMsg] = useState('')
  
   useEffect(() => {
-    if (!merchantId) {
+    if (!token) {
       setPhase('error')
-      setErrorMsg('No merchant ID provided for verification')
+      setErrorMsg('No verification token provided')
       return
     }
  
@@ -25,9 +25,11 @@ export default function VerifyEmailPage() {
       await new Promise((r) => setTimeout(r, 2000))
  
       try {
-        const res = await fetch(`/api/auth/verify-email?merchantId=${merchantId}`, {
-          method: 'GET',
+        const res = await fetch('/api/auth/verify-email', {
+          method: 'POST',
           headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ token }),
         })
         const data = await res.json()
  
@@ -48,7 +50,7 @@ export default function VerifyEmailPage() {
     }
  
     verify()
-  }, [merchantId])
+  }, [token])
 
   return (
     <OnboardingLayout showSteps={false}>

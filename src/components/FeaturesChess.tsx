@@ -50,7 +50,7 @@ export default function FeaturesChess() {
       </div>
 
       {/* Feature rows */}
-      {features.map((feat, i) => (
+      {features.map((feat) => (
         <FadeUp key={feat.id} delay={0.1}>
           <div
             id={feat.id}
