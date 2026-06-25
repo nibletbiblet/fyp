@@ -5,7 +5,7 @@ import { env } from './config/env.js'
 import pool from './config/db.js'
 import { authenticateToken } from './middleware/auth.js'
 import authRoutes from './routes/authRoutes.js'
-import { createPayment, selectCrypto, simulatePaymentBroadcast } from './services/paymentService.js'
+import paymentRoutes from './routes/paymentRoutes.js'
 import { startSettlementWorker } from './services/settlementWorker.js'
 
 export const app = express()
@@ -23,86 +23,7 @@ app.get('/health', (_req, res) => {
 })
 
 app.use('/api/auth', authRoutes)
-
-app.post('/api/payments', authenticateToken, async (req, res) => {
-  try {
-    const { amountSgd, description } = req.body
-
-    if (!amountSgd || Number.isNaN(Number(amountSgd)) || Number(amountSgd) <= 0) {
-      return res.status(400).json({ error: 'Valid amount in SGD is required' })
-    }
-
-    const { paymentId, paymentReference } = await createPayment(
-      req.merchantId,
-      Number(amountSgd),
-      description
-    )
-
-    res.status(201).json({
-      message: 'Payment created successfully',
-      paymentId,
-      paymentReference,
-      checkoutUrl: `/checkout/${paymentId}`,
-    })
-  } catch (err) {
-    console.error('Create payment error:', err)
-    res.status(500).json({ error: 'Internal server error during payment creation' })
-  }
-})
-
-app.get('/api/payments/:id', async (req, res) => {
-  try {
-    const { id } = req.params
-    const [rows] = await pool.query(
-      `SELECT p.*, m.business_name AS merchant_name, m.email AS merchant_email
-       FROM payments p
-       JOIN merchants m ON m.merchant_id = p.merchant_id
-       WHERE p.payment_id = ?`,
-      [id]
-    )
-    if (rows.length === 0) {
-      return res.status(404).json({ error: 'Payment not found' })
-    }
-
-    const [txs] = await pool.query(
-      `SELECT * FROM blockchain_transactions WHERE payment_id = ? ORDER BY detected_at DESC`,
-      [id]
-    )
-
-    res.json({ payment: rows[0], transactions: txs })
-  } catch (err) {
-    console.error('Fetch payment error:', err)
-    res.status(500).json({ error: 'Internal server error' })
-  }
-})
-
-app.post('/api/payments/:id/select-crypto', async (req, res) => {
-  try {
-    const { id } = req.params
-    const { cryptoSymbol, network } = req.body
-
-    if (!cryptoSymbol || !network) {
-      return res.status(400).json({ error: 'cryptoSymbol and network are required' })
-    }
-
-    await selectCrypto(id, cryptoSymbol, network)
-    res.json({ message: 'Crypto selection updated successfully' })
-  } catch (err) {
-    console.error('Select crypto error:', err)
-    res.status(500).json({ error: err.message || 'Internal server error' })
-  }
-})
-
-app.post('/api/payments/:id/simulate-pay', async (req, res) => {
-  try {
-    const { id } = req.params
-    const { txHash } = await simulatePaymentBroadcast(id)
-    res.json({ message: 'Mock payment transaction broadcasted', txHash })
-  } catch (err) {
-    console.error('Simulation error:', err)
-    res.status(500).json({ error: err.message || 'Internal server error' })
-  }
-})
+app.use('/api/payments', paymentRoutes)
 
 app.get('/api/dashboard/stats', authenticateToken, async (req, res) => {
   try {
