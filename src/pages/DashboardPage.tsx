@@ -22,7 +22,9 @@ interface PaymentRecord {
   payment_id: string
   merchant_id: string
   payment_reference: string
+  merchant_order_reference: string | null
   description: string | null
+  customer_reference: string | null
   amount_sgd: number
   crypto_symbol_snapshot: string | null
   network_snapshot: string | null
@@ -84,7 +86,9 @@ export default function DashboardPage() {
   // Modal State
   const [modalOpen, setModalOpen] = useState(false)
   const [amountSgd, setAmountSgd] = useState('')
+  const [merchantOrderReference, setMerchantOrderReference] = useState('')
   const [description, setDescription] = useState('')
+  const [customerReference, setCustomerReference] = useState('')
   const [modalLoading, setModalLoading] = useState(false)
   const [modalError, setModalError] = useState('')
   const [createdLink, setCreatedLink] = useState('')
@@ -239,7 +243,9 @@ export default function DashboardPage() {
         credentials: 'include',
         body: JSON.stringify({
           amountSgd: Number(amountSgd),
-          description
+          merchantOrderReference,
+          description,
+          customerReference,
         })
       })
       const data = await res.json()
@@ -247,9 +253,11 @@ export default function DashboardPage() {
       if (!res.ok) {
         setModalError(data.error || 'Failed to generate payment link')
       } else {
-        setCreatedLink(window.location.origin + data.checkoutUrl)
+        setCreatedLink(window.location.origin + data.payment.checkoutUrl)
         setAmountSgd('')
+        setMerchantOrderReference('')
         setDescription('')
+        setCustomerReference('')
         // Refresh payments list immediately
         fetchDashboardData()
       }
@@ -677,7 +685,7 @@ export default function DashboardPage() {
                           {p.payment_reference}
                         </td>
                         <td style={{ color: 'rgba(255,255,255,0.6)' }}>
-                          {p.description || 'N/A'}
+                          {p.merchant_order_reference || p.description || 'N/A'}
                         </td>
                         <td>
                           {p.crypto_symbol_snapshot ? (
@@ -806,6 +814,10 @@ export default function DashboardPage() {
                 setModalOpen(false)
                 setCreatedLink('')
                 setModalError('')
+                setAmountSgd('')
+                setMerchantOrderReference('')
+                setDescription('')
+                setCustomerReference('')
               }}
               style={{
                 position: 'absolute',
@@ -849,12 +861,32 @@ export default function DashboardPage() {
                   />
                 </div>
                 <div className="form-group">
-                  <label className="form-label">Order Reference / Description</label>
+                  <label className="form-label">Order Reference</label>
                   <input
                     type="text"
-                    placeholder="e.g. Invoice #2035"
+                    placeholder="e.g. INV-2035"
+                    value={merchantOrderReference}
+                    onChange={(e) => setMerchantOrderReference(e.target.value)}
+                    className="form-input"
+                  />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Description</label>
+                  <input
+                    type="text"
+                    placeholder="e.g. Website design deposit"
                     value={description}
                     onChange={(e) => setDescription(e.target.value)}
+                    className="form-input"
+                  />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Customer Reference</label>
+                  <input
+                    type="text"
+                    placeholder="e.g. CUST-1001"
+                    value={customerReference}
+                    onChange={(e) => setCustomerReference(e.target.value)}
                     className="form-input"
                   />
                 </div>
@@ -931,7 +963,9 @@ export default function DashboardPage() {
                     onClick={() => {
                       setCreatedLink('')
                       setAmountSgd('')
+                      setMerchantOrderReference('')
                       setDescription('')
+                      setCustomerReference('')
                     }}
                     className="btn-onboarding-back"
                     style={{ flex: 1 }}

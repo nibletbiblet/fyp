@@ -41,6 +41,14 @@ export const env = {
   btcTestnet: {
     apiBaseUrl: process.env.BTC_TESTNET_API_BASE_URL ?? 'https://mempool.space/testnet/api',
   },
+  mockPayments: {
+    btcTestnetReceivingAddress: process.env.MOCK_BTC_TESTNET_RECEIVING_ADDRESS ?? 'tb1qchainforgephase1mockaddress000000000',
+    ethSepoliaReceivingAddress: process.env.MOCK_ETH_SEPOLIA_RECEIVING_ADDRESS ?? '0x1111111111111111111111111111111111111111',
+    stablecoinSepoliaReceivingAddress: process.env.MOCK_STABLECOIN_SEPOLIA_RECEIVING_ADDRESS ?? '0x2222222222222222222222222222222222222222',
+    btcSgdRate: Number.parseFloat(process.env.MOCK_BTC_SGD_RATE ?? '90000'),
+    ethSgdRate: Number.parseFloat(process.env.MOCK_ETH_SGD_RATE ?? '4500'),
+    stablecoinSgdRate: Number.parseFloat(process.env.MOCK_STABLECOIN_SGD_RATE ?? '1.35'),
+  },
   jwtSecret: required('JWT_SECRET'),
   encryptionKey: requiredHex('ENCRYPTION_KEY', 32),
 }
