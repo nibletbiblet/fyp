@@ -111,11 +111,18 @@ export default function Navbar() {
             </span>
           </div>
           <Link
+            to="/login"
+            id="nav-login"
+            className="btn-ghost text-[11px] py-2 px-5"
+          >
+            Login
+          </Link>
+          <Link
             to="/register"
-            id="nav-launch"
+            id="nav-register"
             className="btn-primary text-[11px] py-2 px-5"
           >
-            Register / Login
+            Register
           </Link>
           {/* Mobile toggle */}
           <button
@@ -172,8 +179,11 @@ export default function Navbar() {
                   {link.label}
                 </a>
               ))}
-              <Link to="/register" className="btn-primary mt-4 justify-center" onClick={() => setMobileOpen(false)}>
-                Register / Login
+              <Link to="/login" className="btn-ghost mt-4 justify-center" onClick={() => setMobileOpen(false)}>
+                Login
+              </Link>
+              <Link to="/register" className="btn-primary justify-center" onClick={() => setMobileOpen(false)}>
+                Register
               </Link>
             </div>
           </motion.div>

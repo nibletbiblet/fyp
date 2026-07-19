@@ -55,6 +55,52 @@ interface ToastNotification {
   timestamp: number
 }
 
+interface PaymentInstructions {
+  qrCodeImageDataUrl?: string
+  qrCodeData?: string
+  checkoutUrl?: string
+  receivingAddress?: string
+  expectedCryptoAmount?: string
+  quoteExpiresAt?: string
+}
+
+interface CreatedPaymentDetails {
+  payment_id: string
+  payment_reference: string
+  amount_sgd: string | number
+  expected_crypto_amount: string | number | null
+  received_crypto_amount?: string | number | null
+  receiving_address: string | null
+  network_snapshot: string | null
+  crypto_symbol_snapshot: string | null
+  quoted_rate_sgd_per_crypto: string | number | null
+  quote_expires_at: string | null
+  payment_instructions: PaymentInstructions | string | null
+  status?: string
+  checkoutUrl?: string
+}
+
+interface DetectedTransaction {
+  txHash?: string
+  amountEth?: string
+  confirmations?: number
+  blockNumber?: number
+}
+
+const DEFAULT_PAYMENT_ASSET_ID = 'asset-eth-sepolia'
+
+function parsePaymentInstructions(value: CreatedPaymentDetails['payment_instructions']): PaymentInstructions {
+  if (!value) return {}
+  if (typeof value === 'string') {
+    try {
+      return JSON.parse(value) as PaymentInstructions
+    } catch {
+      return {}
+    }
+  }
+  return value
+}
+
 export default function DashboardPage() {
   const navigate = useNavigate()
   const [merchant, setMerchant] = useState<MerchantProfile | null>(null)
@@ -92,6 +138,12 @@ export default function DashboardPage() {
   const [modalLoading, setModalLoading] = useState(false)
   const [modalError, setModalError] = useState('')
   const [createdLink, setCreatedLink] = useState('')
+  const [createdPayment, setCreatedPayment] = useState<CreatedPaymentDetails | null>(null)
+  const [detectingPayment, setDetectingPayment] = useState(false)
+  const [detectionMessage, setDetectionMessage] = useState('')
+  const [detectedTransaction, setDetectedTransaction] = useState<DetectedTransaction | null>(null)
+  const [manualTxHash, setManualTxHash] = useState('')
+  const [manualVerifyLoading, setManualVerifyLoading] = useState(false)
 
   // Toast helper
   const addToast = (message: string, amount?: string, type: 'success' | 'info' = 'success') => {
@@ -219,6 +271,18 @@ export default function DashboardPage() {
     return () => clearInterval(interval)
   }, [navigate])
 
+  useEffect(() => {
+    if (!modalOpen || !createdPayment?.payment_id) return
+    if (['SETTLED', 'PAID_OUT', 'EXPIRED', 'FAILED'].includes(createdPayment.status || '')) return
+
+    detectCreatedPayment()
+    const interval = setInterval(() => {
+      detectCreatedPayment()
+    }, 10000)
+
+    return () => clearInterval(interval)
+  }, [modalOpen, createdPayment?.payment_id, createdPayment?.status])
+
   const handleLogout = async () => {
     try {
       await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' })
@@ -233,6 +297,10 @@ export default function DashboardPage() {
     setModalLoading(true)
     setModalError('')
     setCreatedLink('')
+    setCreatedPayment(null)
+    setDetectionMessage('')
+    setDetectedTransaction(null)
+    setManualTxHash('')
 
     try {
       const res = await fetch('/api/payments', {
@@ -243,6 +311,7 @@ export default function DashboardPage() {
         credentials: 'include',
         body: JSON.stringify({
           amountSgd: Number(amountSgd),
+          supportedAssetId: DEFAULT_PAYMENT_ASSET_ID,
           merchantOrderReference,
           description,
           customerReference,
@@ -253,7 +322,11 @@ export default function DashboardPage() {
       if (!res.ok) {
         setModalError(data.error || 'Failed to generate payment link')
       } else {
-        setCreatedLink(window.location.origin + data.payment.checkoutUrl)
+        const payment = data.payment as CreatedPaymentDetails
+        const checkoutPath = payment.checkoutUrl || `/checkout/${payment.payment_id}`
+        setCreatedPayment(payment)
+        setCreatedLink(window.location.origin + checkoutPath)
+        setDetectionMessage('Waiting for Sepolia payment...')
         setAmountSgd('')
         setMerchantOrderReference('')
         setDescription('')
@@ -265,6 +338,83 @@ export default function DashboardPage() {
       setModalError('Network error — please check if backend is running')
     } finally {
       setModalLoading(false)
+    }
+  }
+
+  const applyDetectedCheckout = (data: any) => {
+    if (data.checkout?.payment) {
+      const checkoutPath = createdPayment?.checkoutUrl || `/checkout/${data.checkout.payment.payment_id}`
+      setCreatedPayment({
+        ...data.checkout.payment,
+        checkoutUrl: checkoutPath,
+      })
+    }
+    if (data.transaction) {
+      setDetectedTransaction(data.transaction)
+    }
+    if (data.status === 'CONFIRMED') {
+      setDetectionMessage('Payment confirmed. Simulated SGD settlement completed.')
+      fetchDashboardData()
+    } else if (data.status === 'EXPIRED') {
+      setDetectionMessage('Payment expired before Sepolia payment was detected.')
+    } else {
+      setDetectionMessage('Waiting for Sepolia payment...')
+    }
+  }
+
+  const detectCreatedPayment = async () => {
+    if (!createdPayment?.payment_id || detectingPayment) return
+
+    setDetectingPayment(true)
+    try {
+      const res = await fetch(`/api/payments/${createdPayment.payment_id}/detect`)
+      const data = await res.json()
+      applyDetectedCheckout(data)
+      if (!res.ok && res.status !== 202) {
+        setDetectionMessage(data.error || 'Auto-detection is temporarily unavailable.')
+      }
+    } catch {
+      setDetectionMessage('Auto-detection is temporarily unavailable.')
+    } finally {
+      setDetectingPayment(false)
+    }
+  }
+
+  const handleManualVerify = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!createdPayment?.payment_id || !manualTxHash) return
+
+    setManualVerifyLoading(true)
+    try {
+      const res = await fetch(`/api/payments/${createdPayment.payment_id}/submit-tx`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ txHash: manualTxHash }),
+      })
+      const data = await res.json()
+      if (res.ok && data.status === 'CONFIRMED') {
+        setDetectionMessage('Payment confirmed. Simulated SGD settlement completed.')
+        setDetectedTransaction({
+          txHash: data.txHash,
+          amountEth: data.amountEth,
+          confirmations: data.confirmations,
+        })
+        const checkoutRes = await fetch(`/api/payments/${createdPayment.payment_id}/checkout`)
+        const checkoutData = await checkoutRes.json()
+        if (checkoutRes.ok) {
+          setCreatedPayment({
+            ...checkoutData.payment,
+            checkoutUrl: createdPayment.checkoutUrl,
+          })
+        }
+        fetchDashboardData()
+      } else {
+        setDetectionMessage(data.error || 'Manual transaction verification failed.')
+      }
+    } catch {
+      setDetectionMessage('Manual transaction verification failed.')
+    } finally {
+      setManualVerifyLoading(false)
     }
   }
 
@@ -321,6 +471,13 @@ export default function DashboardPage() {
 
   const isOnboarded = merchant?.status === 'ACTIVE_ONBOARDED'
   const successRate = stats.totalCount > 0 ? Math.round((stats.settledCount / stats.totalCount) * 100) : 0
+  const createdInstructions = createdPayment ? parsePaymentInstructions(createdPayment.payment_instructions) : {}
+  const createdExpectedAmount = createdPayment?.expected_crypto_amount
+    ? Number(createdPayment.expected_crypto_amount).toFixed(6)
+    : ''
+  const createdRate = createdPayment?.quoted_rate_sgd_per_crypto
+    ? Number(createdPayment.quoted_rate_sgd_per_crypto).toFixed(2)
+    : ''
 
   return (
     <div className="dashboard-layout">
@@ -807,13 +964,19 @@ export default function DashboardPage() {
             borderRadius: 16,
             padding: 28,
             boxShadow: '0 10px 40px rgba(0,0,0,0.6)',
-            position: 'relative'
+            position: 'relative',
+            maxHeight: '92vh',
+            overflowY: 'auto'
           }}>
             <button
               onClick={() => {
                 setModalOpen(false)
                 setCreatedLink('')
+                setCreatedPayment(null)
                 setModalError('')
+                setDetectionMessage('')
+                setDetectedTransaction(null)
+                setManualTxHash('')
                 setAmountSgd('')
                 setMerchantOrderReference('')
                 setDescription('')
@@ -859,6 +1022,12 @@ export default function DashboardPage() {
                     className="form-input"
                     required
                   />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Currency / Network</label>
+                  <select className="form-select" value={DEFAULT_PAYMENT_ASSET_ID} disabled>
+                    <option value={DEFAULT_PAYMENT_ASSET_ID}>Sepolia ETH - Ethereum Sepolia</option>
+                  </select>
                 </div>
                 <div className="form-group">
                   <label className="form-label">Order Reference</label>
@@ -915,6 +1084,106 @@ export default function DashboardPage() {
                   ✓ Payment Link Generated Successfully!
                 </div>
 
+                {createdInstructions.qrCodeImageDataUrl && (
+                  <div style={{ textAlign: 'center', marginBottom: 20 }}>
+                    <img
+                      src={createdInstructions.qrCodeImageDataUrl}
+                      alt="Checkout QR code"
+                      style={{ width: 220, height: 220, background: '#fff', borderRadius: 10, padding: 8 }}
+                    />
+                    <div style={{ marginTop: 8, fontSize: 11, color: 'rgba(255,255,255,0.4)' }}>
+                      Scan with MetaMask on Ethereum Sepolia.
+                    </div>
+                  </div>
+                )}
+
+                {createdPayment && (
+                  <div style={{ display: 'grid', gap: 10, marginBottom: 18 }}>
+                    <div className="infra-card">
+                      <div className="infra-card-label">SGD Amount</div>
+                      <div className="infra-card-value">S$ {Number(createdPayment.amount_sgd).toFixed(2)}</div>
+                    </div>
+                    <div className="infra-card">
+                      <div className="infra-card-label">Expected Sepolia ETH</div>
+                      <div className="infra-card-value" style={{ color: '#f0a500' }}>
+                        {createdExpectedAmount} ETH
+                      </div>
+                    </div>
+                    <div className="infra-card">
+                      <div className="infra-card-label">Receiving Wallet</div>
+                      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                        <code style={{ flex: 1, color: '#f5f5f0', wordBreak: 'break-all', fontSize: 11 }}>
+                          {createdPayment.receiving_address}
+                        </code>
+                        <button
+                          type="button"
+                          className="btn-onboarding-back"
+                          style={{ padding: '6px 10px', fontSize: 11 }}
+                          onClick={() => navigator.clipboard.writeText(createdPayment.receiving_address || '')}
+                        >
+                          Copy
+                        </button>
+                      </div>
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                      <div className="infra-card">
+                        <div className="infra-card-label">Network</div>
+                        <div className="infra-card-value">Ethereum Sepolia</div>
+                      </div>
+                      <div className="infra-card">
+                        <div className="infra-card-label">ETH/SGD Rate</div>
+                        <div className="infra-card-value">S$ {createdRate}</div>
+                      </div>
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                      <div className="infra-card">
+                        <div className="infra-card-label">Quote Expires</div>
+                        <div className="infra-card-value">
+                          {createdPayment.quote_expires_at ? new Date(createdPayment.quote_expires_at).toLocaleString() : 'N/A'}
+                        </div>
+                      </div>
+                      <div className="infra-card">
+                        <div className="infra-card-label">Copy ETH Amount</div>
+                        <button
+                          type="button"
+                          className="btn-onboarding-back"
+                          style={{ width: '100%', padding: '6px 10px', fontSize: 11 }}
+                          onClick={() => navigator.clipboard.writeText(String(createdPayment.expected_crypto_amount || ''))}
+                        >
+                          Copy Amount
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                <div
+                  style={{
+                    padding: 12,
+                    border: detectionMessage.includes('confirmed') ? '1px solid #22c55e' : '1px solid rgba(240,165,0,0.25)',
+                    borderRadius: 8,
+                    color: detectionMessage.includes('confirmed') ? '#22c55e' : '#f0a500',
+                    background: detectionMessage.includes('confirmed') ? 'rgba(34,197,94,0.06)' : 'rgba(240,165,0,0.06)',
+                    fontSize: 12,
+                    lineHeight: 1.6,
+                    marginBottom: 18,
+                  }}
+                >
+                  <strong>{detectingPayment ? 'Scanning Sepolia...' : detectionMessage || 'Waiting for Sepolia payment...'}</strong>
+                  {!detectionMessage.includes('confirmed') && (
+                    <div style={{ color: 'rgba(255,255,255,0.45)', marginTop: 4 }}>
+                      Auto-detection scans recent Sepolia blocks every 10 seconds.
+                    </div>
+                  )}
+                  {detectedTransaction?.txHash && (
+                    <div style={{ marginTop: 8, color: 'rgba(255,255,255,0.72)' }}>
+                      <div>Tx: <code style={{ color: '#f5f5f0', wordBreak: 'break-all' }}>{detectedTransaction.txHash}</code></div>
+                      {detectedTransaction.amountEth && <div>Received: {Number(detectedTransaction.amountEth).toFixed(6)} ETH</div>}
+                      {detectedTransaction.confirmations !== undefined && <div>Confirmations: {detectedTransaction.confirmations}</div>}
+                    </div>
+                  )}
+                </div>
+
                 <div className="form-group">
                   <label className="form-label">Shareable Checkout URL</label>
                   <div style={{
@@ -949,6 +1218,42 @@ export default function DashboardPage() {
                   </div>
                 </div>
 
+                <div style={{ padding: 12, border: '1px dashed rgba(240,165,0,0.25)', borderRadius: 8, color: 'rgba(255,255,255,0.55)', fontSize: 12, lineHeight: 1.6 }}>
+                  1. Customer scans the MetaMask payment QR.
+                  <br />
+                  2. Customer sends the exact Sepolia ETH amount to the receiving wallet.
+                  <br />
+                  3. The website scans Sepolia and confirms the matching payment automatically.
+                  <br />
+                  4. MVP matching uses shared wallet + amount + time window. Production should use unique payment addresses, provider webhooks, or stronger unique amount matching.
+                </div>
+
+                <form onSubmit={handleManualVerify} style={{ marginTop: 16 }}>
+                  <details>
+                    <summary style={{ cursor: 'pointer', color: '#f0a500', fontSize: 12, fontWeight: 700 }}>
+                      Payment not detected? Paste transaction hash manually.
+                    </summary>
+                    <div style={{ marginTop: 12 }}>
+                      <input
+                        type="text"
+                        value={manualTxHash}
+                        onChange={(e) => setManualTxHash(e.target.value.trim())}
+                        className="form-input"
+                        placeholder="0x..."
+                        autoComplete="off"
+                      />
+                      <button
+                        type="submit"
+                        className="btn-onboarding-primary"
+                        disabled={!manualTxHash || manualVerifyLoading}
+                        style={{ width: '100%', justifyContent: 'center', marginTop: 10 }}
+                      >
+                        {manualVerifyLoading ? 'Verifying...' : 'Verify Hash Manually'}
+                      </button>
+                    </div>
+                  </details>
+                </form>
+
                 <div style={{ display: 'flex', gap: 12, marginTop: 24 }}>
                   <a
                     href={createdLink}
@@ -962,6 +1267,10 @@ export default function DashboardPage() {
                   <button
                     onClick={() => {
                       setCreatedLink('')
+                      setCreatedPayment(null)
+                      setDetectionMessage('')
+                      setDetectedTransaction(null)
+                      setManualTxHash('')
                       setAmountSgd('')
                       setMerchantOrderReference('')
                       setDescription('')

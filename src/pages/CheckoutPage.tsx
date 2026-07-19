@@ -39,6 +39,7 @@ interface CheckoutPayment {
   crypto_symbol_snapshot: string | null
   network_snapshot: string | null
   expected_crypto_amount: string | number | null
+  received_crypto_amount: string | number | null
   quoted_rate_sgd_per_crypto: string | number | null
   quote_expires_at: string | null
   receiving_address: string | null
@@ -51,6 +52,12 @@ interface CheckoutPayment {
 interface CheckoutResponse {
   payment: CheckoutPayment
   supportedAssets: SupportedAsset[]
+}
+
+interface DetectedTransaction {
+  txHash?: string
+  amountEth?: string
+  confirmations?: number
 }
 
 function parseInstructions(value: CheckoutPayment['payment_instructions']): PaymentInstructions {
@@ -83,6 +90,13 @@ export default function CheckoutPage() {
   const [checkout, setCheckout] = useState<CheckoutResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [selectingAssetId, setSelectingAssetId] = useState('')
+  const [txHash, setTxHash] = useState('')
+  const [verifyingTx, setVerifyingTx] = useState(false)
+  const [verificationStatus, setVerificationStatus] = useState('')
+  const [verificationMessage, setVerificationMessage] = useState('')
+  const [detectingPayment, setDetectingPayment] = useState(false)
+  const [detectionMessage, setDetectionMessage] = useState('')
+  const [detectedTransaction, setDetectedTransaction] = useState<DetectedTransaction | null>(null)
   const [errorMsg, setErrorMsg] = useState('')
 
   const loadCheckout = async () => {
@@ -108,6 +122,49 @@ export default function CheckoutPage() {
     loadCheckout()
   }, [paymentId])
 
+  const detectPayment = async () => {
+    if (!paymentId || detectingPayment) return
+
+    setDetectingPayment(true)
+    try {
+      const res = await fetch(`/api/payments/${paymentId}/detect`)
+      const data = await res.json()
+
+      if (data.checkout) {
+        setCheckout(data.checkout)
+      }
+      if (data.transaction) {
+        setDetectedTransaction(data.transaction)
+      }
+      if (data.status === 'CONFIRMED') {
+        setDetectionMessage('Payment confirmed. Simulated SGD settlement completed.')
+      } else if (data.status === 'EXPIRED') {
+        setDetectionMessage('Payment expired before Sepolia payment was detected.')
+      } else if (!res.ok && res.status !== 202) {
+        setDetectionMessage(data.error || 'Auto-detection is temporarily unavailable.')
+      } else {
+        setDetectionMessage('Waiting for Sepolia payment...')
+      }
+    } catch {
+      setDetectionMessage('Auto-detection is temporarily unavailable.')
+    } finally {
+      setDetectingPayment(false)
+    }
+  }
+
+  useEffect(() => {
+    const status = checkout?.payment.status
+    if (!paymentId || !checkout?.payment.supported_asset_id || !checkout.payment.receiving_address) return
+    if (['SETTLED', 'PAID_OUT', 'EXPIRED', 'FAILED'].includes(status || '')) return
+
+    detectPayment()
+    const interval = setInterval(() => {
+      detectPayment()
+    }, 10000)
+
+    return () => clearInterval(interval)
+  }, [paymentId, checkout?.payment.payment_id, checkout?.payment.status, checkout?.payment.supported_asset_id])
+
   const handleSelectAsset = async (supportedAssetId: string) => {
     if (!paymentId) return
     setSelectingAssetId(supportedAssetId)
@@ -129,6 +186,55 @@ export default function CheckoutPage() {
       setErrorMsg('Network error - could not select payment asset')
     } finally {
       setSelectingAssetId('')
+    }
+  }
+
+  const handleSubmitTransaction = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!paymentId) return
+
+    setVerifyingTx(true)
+    setVerificationStatus('')
+    setVerificationMessage('')
+    setErrorMsg('')
+
+    try {
+      const res = await fetch(`/api/payments/${paymentId}/submit-tx`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ txHash }),
+      })
+      const data = await res.json()
+
+      setVerificationStatus(data.status || '')
+
+      if (res.ok && data.status === 'CONFIRMED') {
+        setVerificationMessage('Transaction confirmed on Sepolia. Simulated SGD settlement has been created.')
+        setDetectionMessage('Payment confirmed. Simulated SGD settlement completed.')
+        setDetectedTransaction({
+          txHash: data.txHash,
+          amountEth: data.amountEth,
+          confirmations: data.confirmations,
+        })
+        await loadCheckout()
+        return
+      }
+
+      if (res.status === 202) {
+        setVerificationMessage(data.error || 'Transaction found but still waiting for Sepolia confirmation.')
+        await loadCheckout()
+        return
+      }
+
+      setVerificationMessage(data.error || 'Transaction verification failed')
+      if (!res.ok) {
+        await loadCheckout()
+      }
+    } catch {
+      setVerificationStatus('NETWORK_ERROR')
+      setVerificationMessage('Network error - could not verify transaction hash')
+    } finally {
+      setVerifyingTx(false)
     }
   }
 
@@ -165,6 +271,8 @@ export default function CheckoutPage() {
   const instructions = parseInstructions(payment.payment_instructions)
   const selectedAsset = supportedAssets.find((asset) => asset.supported_asset_id === payment.supported_asset_id)
   const hasPaymentInstructions = Boolean(payment.supported_asset_id && payment.receiving_address)
+  const canSubmitSepoliaTx = payment.network_snapshot === 'ETH_SEPOLIA' && ['AWAITING_PAYMENT', 'CONFIRMING', 'UNDERPAID'].includes(payment.status)
+  const visibleAssets = supportedAssets.filter((asset) => asset.supported_asset_id === 'asset-eth-sepolia')
 
   return (
     <OnboardingLayout showSteps={false}>
@@ -222,10 +330,10 @@ export default function CheckoutPage() {
           <div className="dashboard-table-wrap" style={{ marginBottom: 24 }}>
             <div className="dashboard-table-header">
               <h3>Select testnet crypto</h3>
-              <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.35)' }}>Use testnet funds only</span>
+              <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.35)' }}>Sepolia ETH only for this MVP</span>
             </div>
             <div style={{ display: 'grid', gap: 12 }}>
-              {supportedAssets.map((asset) => (
+              {visibleAssets.map((asset) => (
                 <button
                   key={asset.supported_asset_id}
                   type="button"
@@ -279,7 +387,7 @@ export default function CheckoutPage() {
                   <div style={{ width: 220, height: 220, background: '#fff', borderRadius: 10, margin: '0 auto' }} />
                 )}
                 <p style={{ fontSize: 11, color: 'rgba(255,255,255,0.4)', marginTop: 10 }}>
-                  Scan with a compatible testnet wallet.
+                  Scan with MetaMask on Ethereum Sepolia.
                 </p>
               </div>
 
@@ -332,8 +440,99 @@ export default function CheckoutPage() {
             </div>
 
             <div style={{ marginTop: 24, padding: 12, border: '1px dashed rgba(240,165,0,0.25)', borderRadius: 8, color: 'rgba(255,255,255,0.55)', fontSize: 12, lineHeight: 1.6 }}>
-              Use the exact selected network. Network fees may apply. This prototype accepts testnet payments only and does not detect real blockchain transactions in Phase 1.
+              Use Ethereum Sepolia testnet only. Send from MetaMask and this page will scan Sepolia every 10 seconds for a matching payment.
+              This MVP matches one shared wallet by address, amount, and time window; production should use unique payment addresses, provider webhooks, or stronger unique amount matching.
             </div>
+
+            <div
+              style={{
+                marginTop: 16,
+                padding: 12,
+                borderRadius: 8,
+                border: detectionMessage.includes('confirmed') || payment.status === 'SETTLED' ? '1px solid #22c55e' : '1px solid rgba(240,165,0,0.35)',
+                color: detectionMessage.includes('confirmed') || payment.status === 'SETTLED' ? '#22c55e' : '#f0a500',
+                background: detectionMessage.includes('confirmed') || payment.status === 'SETTLED' ? 'rgba(34,197,94,0.06)' : 'rgba(240,165,0,0.06)',
+                fontSize: 12,
+                lineHeight: 1.5,
+              }}
+            >
+              <strong>{detectingPayment ? 'Scanning Sepolia...' : detectionMessage || 'Waiting for Sepolia payment...'}</strong>
+              {detectedTransaction?.txHash && (
+                <div style={{ marginTop: 8, color: 'rgba(255,255,255,0.72)' }}>
+                  <div>Tx: <code style={{ color: '#f5f5f0', wordBreak: 'break-all' }}>{detectedTransaction.txHash}</code></div>
+                  {detectedTransaction.amountEth && <div>Received: {Number(detectedTransaction.amountEth).toFixed(6)} ETH</div>}
+                  {detectedTransaction.confirmations !== undefined && <div>Confirmations: {detectedTransaction.confirmations}</div>}
+                </div>
+              )}
+            </div>
+
+            {canSubmitSepoliaTx && (
+              <form onSubmit={handleSubmitTransaction} style={{ marginTop: 18 }}>
+                <details>
+                  <summary style={{ cursor: 'pointer', color: '#f0a500', fontSize: 12, fontWeight: 700 }}>
+                    Payment not detected? Paste transaction hash manually.
+                  </summary>
+                  <div style={{ marginTop: 12 }}>
+                    <div className="form-group">
+                      <label className="form-label" htmlFor="txHash">
+                        Sepolia Transaction Hash
+                      </label>
+                      <input
+                        id="txHash"
+                        type="text"
+                        value={txHash}
+                        onChange={(e) => setTxHash(e.target.value.trim())}
+                        className="form-input"
+                        placeholder="0x..."
+                        autoComplete="off"
+                      />
+                    </div>
+                    <button
+                      type="submit"
+                      className="btn-onboarding-primary"
+                      disabled={verifyingTx || !txHash}
+                      style={{ width: '100%', justifyContent: 'center' }}
+                    >
+                      {verifyingTx ? 'Verifying on Sepolia...' : 'Verify Hash Manually'}
+                    </button>
+                  </div>
+                </details>
+              </form>
+            )}
+
+            {verificationMessage && (
+              <div
+                style={{
+                  marginTop: 16,
+                  padding: 12,
+                  borderRadius: 8,
+                  border: verificationStatus === 'CONFIRMED' ? '1px solid #22c55e' : '1px solid rgba(240,165,0,0.35)',
+                  color: verificationStatus === 'CONFIRMED' ? '#22c55e' : '#f0a500',
+                  background: verificationStatus === 'CONFIRMED' ? 'rgba(34,197,94,0.06)' : 'rgba(240,165,0,0.06)',
+                  fontSize: 12,
+                  lineHeight: 1.5,
+                }}
+              >
+                <strong>{verificationStatus || 'VERIFICATION'}:</strong> {verificationMessage}
+              </div>
+            )}
+
+            {payment.status === 'SETTLED' && (
+              <div
+                style={{
+                  marginTop: 16,
+                  padding: 12,
+                  borderRadius: 8,
+                  border: '1px solid #22c55e',
+                  color: '#22c55e',
+                  background: 'rgba(34,197,94,0.06)',
+                  fontSize: 12,
+                }}
+              >
+                Payment confirmed and simulated SGD settlement completed.
+                {payment.received_crypto_amount ? ` Received ${Number(payment.received_crypto_amount).toFixed(6)} ETH.` : ''}
+              </div>
+            )}
 
             <div style={{ marginTop: 18 }}>
               <div className="infra-card-label">QR Payload</div>

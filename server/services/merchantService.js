@@ -1,11 +1,26 @@
 import crypto from 'node:crypto'
 import bcrypt from 'bcrypt'
-import { v4 as uuidv4 } from 'uuid'
+import jwt from 'jsonwebtoken'
 import pool from '../config/db.js'
-import { encryptBankDetails } from '../utils/encryption.js'
+import { env } from '../config/env.js'
 
 const SALT_ROUNDS = 10
 const DUMMY_PASSWORD_HASH = '$2b$10$C6UzMDM.H6dfI/f/IKcEeO15D/MH6fiHvo4G7Yx1uUymRETrx2rga'
+
+const createEmailVerificationToken = (merchantId) =>
+  jwt.sign({ merchantId, purpose: 'email_verification' }, env.jwtSecret, { expiresIn: '24h' })
+
+const readEmailVerificationToken = (token) => {
+  try {
+    const payload = jwt.verify(token, env.jwtSecret)
+    if (payload.purpose !== 'email_verification' || !payload.merchantId) {
+      throw new Error('Invalid verification token')
+    }
+    return payload.merchantId
+  } catch {
+    throw Object.assign(new Error('Invalid verification token'), { code: 'INVALID_TOKEN' })
+  }
+}
 
 /**
  * Registers a new merchant.
@@ -32,17 +47,14 @@ export async function createMerchant({
     await conn.beginTransaction()
 
     // 1. Check uniqueness
-    const [existingEmail] = await conn.query(
-      'SELECT merchant_id FROM merchants WHERE email = ?',
-      [email]
-    )
+    const [existingEmail] = await conn.query('SELECT id FROM merchants WHERE email = ?', [email])
     if (existingEmail.length > 0) {
       throw Object.assign(new Error('Email already registered'), { code: 'DUPLICATE_EMAIL' })
     }
 
     if (uen) {
       const [existingUen] = await conn.query(
-        'SELECT merchant_id FROM merchants WHERE uen = ?',
+        'SELECT id FROM merchants WHERE bank_account_label = ?',
         [uen]
       )
       if (existingUen.length > 0) {
@@ -53,31 +65,38 @@ export async function createMerchant({
     // 2. Hash password
     const passwordHash = await bcrypt.hash(password, SALT_ROUNDS)
 
-    // 3. Encrypt bank account number
-    const { encrypted, iv, authTag } = encryptBankDetails(bankAccountNumber)
+    // 3. Store only the bank account last 4 digits in this legacy live schema.
     const bankAccountLast4 = bankAccountNumber.slice(-4)
 
-    // 4. Generate verification token
-    const verificationToken = crypto.randomBytes(48).toString('hex')
-
-    // 5. Insert merchant
-    const merchantId = uuidv4()
-    await conn.query(
+    // 4. Insert merchant
+    const [merchantResult] = await conn.query(
       `INSERT INTO merchants (
-        merchant_id, business_name, uen, email, password_hash,
-        bank_name, bank_holder_name, bank_account_last4,
-        bank_account_encrypted, bank_account_iv, bank_account_auth_tag,
-        email_verification_token, status, kyc_status
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE_UNVERIFIED', 'PENDING')`,
+        name, email, bank_name, account_holder_name, account_last4,
+        bank_account_label, status, kyc_status
+      ) VALUES (?, ?, ?, ?, ?, ?, 'ACTIVE_UNVERIFIED', 'PENDING')`,
       [
-        merchantId, businessName, uen || null, email, passwordHash,
-        bankName, bankHolderName, bankAccountLast4,
-        encrypted, iv, authTag,
-        verificationToken,
+        businessName,
+        email,
+        bankName,
+        bankHolderName,
+        bankAccountLast4,
+        uen || null,
       ]
     )
 
-    // 6. Audit log
+    const merchantId = merchantResult.insertId
+    const passwordSalt = crypto.randomBytes(16).toString('hex')
+
+    await conn.query(
+      `INSERT INTO merchant_users (
+        merchant_id, email, password_hash, password_salt, full_name
+      ) VALUES (?, ?, ?, ?, ?)`,
+      [merchantId, email, passwordHash, passwordSalt, bankHolderName]
+    )
+
+    const verificationToken = createEmailVerificationToken(merchantId)
+
+    // 5. Audit log
     await conn.query(
       `INSERT INTO audit_logs (merchant_id, actor_type, actor_id, action, details)
        VALUES (?, 'MERCHANT', ?, 'MERCHANT_REGISTERED', ?)`,
@@ -105,10 +124,10 @@ export async function verifyEmailAndProvision(token) {
   try {
     await conn.beginTransaction()
 
-    // Find merchant by verification token
+    const merchantId = readEmailVerificationToken(token)
     const [rows] = await conn.query(
-      'SELECT merchant_id, status FROM merchants WHERE email_verification_token = ?',
-      [token]
+      'SELECT id, status FROM merchants WHERE id = ?',
+      [merchantId]
     )
     if (rows.length === 0) {
       throw Object.assign(new Error('Invalid verification token'), { code: 'INVALID_TOKEN' })
@@ -117,35 +136,30 @@ export async function verifyEmailAndProvision(token) {
     const merchant = rows[0]
     if (merchant.status === 'ACTIVE_ONBOARDED') {
       await conn.rollback()
-      return { merchantId: merchant.merchant_id, alreadyVerified: true }
+      return { merchantId: merchant.id, alreadyVerified: true }
     }
 
-    // Mint mock infrastructure IDs (simulating Triple-A provider)
+    // Mint mock infrastructure IDs for the simulated provider flow.
     const containerId = `CTR-${crypto.randomBytes(8).toString('hex').toUpperCase()}`
     const walletId = `WLT-${crypto.randomBytes(8).toString('hex').toUpperCase()}`
 
-    // Atomic update: provision infrastructure + set status
     await conn.query(
       `UPDATE merchants SET
         status = 'ACTIVE_ONBOARDED',
-        email_verification_token = NULL,
-        email_verified_at = NOW(),
-        container_id = ?,
-        wallet_id = ?,
-        onboarded_at = NOW()
-      WHERE merchant_id = ?`,
-      [containerId, walletId, merchant.merchant_id]
+        triplea_merchant_id = ?,
+        triplea_wallet_id = ?
+      WHERE id = ?`,
+      [containerId, walletId, merchant.id]
     )
 
-    // Audit log
     await conn.query(
       `INSERT INTO audit_logs (merchant_id, actor_type, actor_id, action, details)
        VALUES (?, 'SYSTEM', 'INFRASTRUCTURE_PROVISIONER', 'EMAIL_VERIFIED_INFRASTRUCTURE_PROVISIONED', ?)`,
-      [merchant.merchant_id, JSON.stringify({ containerId, walletId })]
+      [merchant.id, JSON.stringify({ containerId, walletId })]
     )
 
     await conn.commit()
-    return { merchantId: merchant.merchant_id, containerId, walletId, alreadyVerified: false }
+    return { merchantId: merchant.id, containerId, walletId, alreadyVerified: false }
   } catch (err) {
     await conn.rollback()
     throw err
@@ -160,7 +174,15 @@ export async function verifyEmailAndProvision(token) {
  */
 export async function authenticateMerchant(email, password) {
   const [rows] = await pool.query(
-    'SELECT merchant_id, email, business_name, password_hash, status FROM merchants WHERE email = ?',
+    `SELECT
+       m.id,
+       m.email,
+       m.name,
+       m.status,
+       mu.password_hash
+     FROM merchants m
+     JOIN merchant_users mu ON mu.merchant_id = m.id
+     WHERE mu.email = ?`,
     [email]
   )
   if (rows.length === 0) {
@@ -179,13 +201,13 @@ export async function authenticateMerchant(email, password) {
   await pool.query(
     `INSERT INTO audit_logs (merchant_id, actor_type, actor_id, action, details)
      VALUES (?, 'MERCHANT', ?, 'MERCHANT_LOGIN', ?)`,
-    [merchant.merchant_id, merchant.merchant_id, JSON.stringify({ email })]
+    [merchant.id, merchant.id, JSON.stringify({ email })]
   )
 
   return {
-    merchantId: merchant.merchant_id,
+    merchantId: merchant.id,
     email: merchant.email,
-    businessName: merchant.business_name,
+    businessName: merchant.name,
     status: merchant.status,
   }
 }
@@ -195,11 +217,22 @@ export async function authenticateMerchant(email, password) {
  */
 export async function getMerchantProfile(merchantId) {
   const [rows] = await pool.query(
-    `SELECT merchant_id, business_name, uen, email,
-            bank_name, bank_holder_name, bank_account_last4,
-            kyc_status, status, container_id, wallet_id,
-            email_verified_at, onboarded_at, created_at
-     FROM merchants WHERE merchant_id = ?`,
+    `SELECT
+       id AS merchant_id,
+       name AS business_name,
+       bank_account_label AS uen,
+       email,
+       bank_name,
+       account_holder_name AS bank_holder_name,
+       account_last4 AS bank_account_last4,
+       kyc_status,
+       status,
+       triplea_merchant_id AS container_id,
+       triplea_wallet_id AS wallet_id,
+       CASE WHEN status = 'ACTIVE_ONBOARDED' THEN updated_at ELSE NULL END AS email_verified_at,
+       CASE WHEN status = 'ACTIVE_ONBOARDED' THEN updated_at ELSE NULL END AS onboarded_at,
+       created_at
+     FROM merchants WHERE id = ?`,
     [merchantId]
   )
   if (rows.length === 0) {
@@ -212,14 +245,14 @@ export async function getMerchantProfile(merchantId) {
  * Resends verification — generates a new token.
  */
 export async function resendVerification(email) {
-  const newToken = crypto.randomBytes(48).toString('hex')
-  const [result] = await pool.query(
-    `UPDATE merchants SET email_verification_token = ?
+  const [rows] = await pool.query(
+    `SELECT id
+     FROM merchants
      WHERE email = ? AND status = 'ACTIVE_UNVERIFIED'`,
-    [newToken, email]
+    [email]
   )
-  if (result.affectedRows === 0) {
+  if (rows.length === 0) {
     throw Object.assign(new Error('No unverified account found for this email'), { code: 'NOT_FOUND' })
   }
-  return { verificationToken: newToken }
+  return { verificationToken: createEmailVerificationToken(rows[0].id) }
 }
