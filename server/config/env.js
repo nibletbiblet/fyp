@@ -37,7 +37,13 @@ export const env = {
   sepolia: {
     rpcUrl: process.env.SEPOLIA_RPC_URL ?? '',
     stablecoinContractAddress: process.env.SEPOLIA_STABLECOIN_CONTRACT_ADDRESS ?? '',
+    merchantReceivingAddress: process.env.MERCHANT_RECEIVING_ADDRESS ?? process.env.MOCK_ETH_SEPOLIA_RECEIVING_ADDRESS ?? '',
   },
+  coingecko: {
+    baseUrl: process.env.COINGECKO_BASE_URL ?? 'https://api.coingecko.com/api/v3',
+  },
+  rateLockMinutes: toInteger(process.env.RATE_LOCK_MINUTES, 15),
+  paymentTolerancePercent: Number.parseFloat(process.env.PAYMENT_TOLERANCE_PERCENT ?? '1'),
   btcTestnet: {
     apiBaseUrl: process.env.BTC_TESTNET_API_BASE_URL ?? 'https://mempool.space/testnet/api',
   },

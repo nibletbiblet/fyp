@@ -12,9 +12,9 @@
     "preview": "vite preview"
   },
   "devDependencies": {
-    "autoprefixer": "^10.5.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
+    "autoprefixer": "^10.5.0",
     "nodemon": "^3.1.10",
     "postcss": "^8.5.12",
     "tailwindcss": "^3.4.19",
@@ -27,7 +27,7 @@
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.5",
     "dotenv": "^17.2.3",
-    "ethers": "^6.15.0",
+    "ethers": "^6.17.0",
     "express": "^5.2.1",
     "hls.js": "^1.6.16",
     "jsonwebtoken": "^9.0.3",
