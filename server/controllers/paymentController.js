@@ -32,15 +32,33 @@ export async function createPaymentRequest(req, res) {
 
     const selectedAssetId = supportedAssetId || assetId
     if (selectedAssetId) {
-      const checkout = await selectAsset(payment.paymentId, selectedAssetId)
-      return res.status(201).json({
-        message: 'Payment request created',
-        payment: {
-          ...checkout.payment,
-          checkoutUrl: payment.checkoutUrl,
-        },
-        supportedAssets: checkout.supportedAssets,
-      })
+      try {
+        const checkout = await selectAsset(payment.paymentId, selectedAssetId)
+        return res.status(201).json({
+          message: 'Payment request created',
+          payment: {
+            ...checkout.payment,
+            checkoutUrl: payment.checkoutUrl,
+          },
+          supportedAssets: checkout.supportedAssets,
+          risk: checkout.risk,
+        })
+      } catch (err) {
+        if (['RISK_KYC_REQUIRED', 'RISK_MANUAL_REVIEW', 'RISK_REJECTED'].includes(err.code)) {
+          return res.status(201).json({
+            message: 'Payment request created, but risk review is required before checkout can continue',
+            payment: {
+              payment_id: payment.paymentId,
+              payment_reference: payment.paymentReference,
+              amount_sgd: payment.amountSgd,
+              checkoutUrl: payment.checkoutUrl,
+              status: err.risk?.decision === 'REJECT' ? 'FAILED' : err.risk?.decision,
+            },
+            risk: err.risk,
+          })
+        }
+        throw err
+      }
     }
 
     return res.status(201).json({
@@ -104,6 +122,12 @@ export async function selectPaymentAsset(req, res) {
     ) {
       return res.status(400).json({ error: err.message })
     }
+    if (err.code === 'KYC_REQUIRED') {
+      return res.status(403).json({ error: err.message })
+    }
+    if (['RISK_KYC_REQUIRED', 'RISK_MANUAL_REVIEW', 'RISK_REJECTED'].includes(err.code)) {
+      return res.status(403).json({ error: err.message, risk: err.risk })
+    }
     if (
       err.code === 'QUOTE_PROVIDER_UNAVAILABLE' ||
       err.code === 'QUOTE_PROVIDER_INVALID_RATE'
@@ -137,6 +161,12 @@ export async function detectPaymentTransaction(req, res) {
     }
     if (err.code === 'PAYMENT_NOT_READY' || err.code === 'UNSUPPORTED_PAYMENT_ASSET') {
       return res.status(400).json({ error: err.message })
+    }
+    if (err.code === 'KYC_REQUIRED') {
+      return res.status(403).json({ error: err.message })
+    }
+    if (['RISK_KYC_REQUIRED', 'RISK_MANUAL_REVIEW', 'RISK_REJECTED'].includes(err.code)) {
+      return res.status(403).json({ error: err.message, risk: err.risk })
     }
     if (
       err.code === 'SEPOLIA_RPC_URL_MISSING' ||
@@ -190,6 +220,12 @@ export async function submitPaymentTransaction(req, res) {
     }
     if (err.code === 'PAYMENT_NOT_READY' || err.code === 'UNSUPPORTED_PAYMENT_ASSET') {
       return res.status(400).json({ error: err.message })
+    }
+    if (err.code === 'KYC_REQUIRED') {
+      return res.status(403).json({ error: err.message })
+    }
+    if (['RISK_KYC_REQUIRED', 'RISK_MANUAL_REVIEW', 'RISK_REJECTED'].includes(err.code)) {
+      return res.status(403).json({ error: err.message, risk: err.risk })
     }
     if (
       err.code === 'SEPOLIA_RPC_URL_MISSING' ||

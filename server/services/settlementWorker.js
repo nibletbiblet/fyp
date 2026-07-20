@@ -95,7 +95,7 @@ async function processPendingPayments() {
 
     // ═══════════════════════════════════════════════════════════════
     //  STAGE 2: Convert CONFIRMED payments → CONVERTED_TO_SGD
-    //  Simulates MAS-licensed provider (e.g. Triple-A) converting
+    //  Simulates the gateway converting
     //  crypto to SGD. Happens one tick after CONFIRMED.
     // ═══════════════════════════════════════════════════════════════
     const [confirmedPayments] = await pool.query(
@@ -115,7 +115,7 @@ async function processPendingPayments() {
       await pool.query(
         `INSERT INTO audit_logs (payment_id, merchant_id, actor_type, action, details, created_at)
          VALUES (?, ?, 'SYSTEM', 'CRYPTO_CONVERTED_TO_SGD', ?, CURRENT_TIMESTAMP)`,
-        [cp.payment_id, cp.merchant_id, JSON.stringify({ provider: 'Triple-A (simulated)' })]
+        [cp.payment_id, cp.merchant_id, JSON.stringify({ provider: 'ChainForge simulated conversion engine' })]
       )
 
       console.log(`💱 Payment ${cp.payment_reference} converted to SGD`)

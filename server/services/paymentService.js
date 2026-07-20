@@ -10,6 +10,12 @@ import {
   verifySepoliaEthTransaction,
 } from './paymentProviders/ethSepoliaProvider.js'
 import { calculateFees } from './paymentProviders/mockConversionProvider.js'
+import { getPaymentKyc, isPaymentKycVerified } from './identityReviewService.js'
+import {
+  assessPaymentRisk,
+  getLatestRiskAssessment,
+  updateWalletProfileAfterPayment,
+} from './riskService.js'
 
 const PAYMENT_REQUEST_TTL_MS = 24 * 60 * 60 * 1000
 const ETH_SEPOLIA_ASSET_ID = 'asset-eth-sepolia'
@@ -58,6 +64,59 @@ const getQuoteForAsset = async (asset) => {
 
 const buildCheckoutUrl = (paymentId) => `/checkout/${paymentId}`
 const buildAbsoluteCheckoutUrl = (paymentId) => `${env.corsOrigin.replace(/\/$/, '')}${buildCheckoutUrl(paymentId)}`
+
+const getRiskBlockedStatus = (decision) => {
+  if (decision === 'REJECT') return 'FAILED'
+  if (decision === 'MANUAL_REVIEW') return 'MANUAL_REVIEW_REQUIRED'
+  if (decision === 'KYC_REQUIRED') return 'KYC_REQUIRED'
+  return null
+}
+
+const buildRiskError = (risk) => {
+  const messageByDecision = {
+    KYC_REQUIRED: 'Risk engine requires customer KYC before this payment can continue',
+    MANUAL_REVIEW: 'Risk engine sent this payment for manual review',
+    REJECT: 'Risk engine rejected this payment',
+  }
+  const codeByDecision = {
+    KYC_REQUIRED: 'RISK_KYC_REQUIRED',
+    MANUAL_REVIEW: 'RISK_MANUAL_REVIEW',
+    REJECT: 'RISK_REJECTED',
+  }
+  return Object.assign(new Error(messageByDecision[risk.decision] || 'Risk engine blocked this payment'), {
+    code: codeByDecision[risk.decision] || 'RISK_BLOCKED',
+    risk,
+  })
+}
+
+const ensureRiskAllowsPayment = async (paymentId, { conn = pool, payment = null, stage = 'PRE_PAYMENT', walletAddress = null } = {}) => {
+  const risk = await assessPaymentRisk(paymentId, { stage, walletAddress })
+  if (risk.decision === 'ALLOW') return risk
+
+  if (risk.decision === 'KYC_REQUIRED' && await isPaymentKycVerified(paymentId)) {
+    return assessPaymentRisk(paymentId, { stage, walletAddress })
+  }
+
+  const blockedStatus = getRiskBlockedStatus(risk.decision)
+  if (blockedStatus) {
+    await conn.query(
+      `UPDATE payments
+       SET status = ?
+       WHERE payment_id = ?`,
+      [blockedStatus, paymentId]
+    )
+  }
+
+  if (payment?.merchant_id) {
+    await conn.query(
+      `INSERT INTO audit_logs (payment_id, merchant_id, actor_type, action, details, created_at)
+       VALUES (?, ?, 'SYSTEM', 'PAYMENT_RISK_BLOCKED', ?, CURRENT_TIMESTAMP)`,
+      [paymentId, payment.merchant_id, JSON.stringify(risk)]
+    )
+  }
+
+  throw buildRiskError(risk)
+}
 
 const buildWalletPaymentPayload = ({ asset, payment, expectedCryptoAmount, receivingAddress }) => {
   if (asset.network === 'BTC_TESTNET') {
@@ -202,9 +261,14 @@ export async function getCheckoutDetails(paymentId) {
      ORDER BY crypto_symbol, network`
   )
 
+  const kyc = await getPaymentKyc(paymentId)
+  const risk = await getLatestRiskAssessment(paymentId)
+
   return {
     payment: payments[0],
     supportedAssets,
+    kyc,
+    risk,
   }
 }
 
@@ -229,6 +293,8 @@ export async function selectAsset(paymentId, supportedAssetId) {
     if (!['CREATED', 'AWAITING_CRYPTO_SELECTION', 'QR_GENERATED', 'AWAITING_PAYMENT'].includes(payment.status)) {
       throw Object.assign(new Error(`Payment cannot select asset from status ${payment.status}`), { code: 'INVALID_PAYMENT_STATUS' })
     }
+
+    await ensureRiskAllowsPayment(paymentId, { conn, payment, stage: 'PRE_PAYMENT' })
 
     const [assets] = await conn.query(
       `SELECT *
@@ -342,7 +408,11 @@ export async function selectAsset(paymentId, supportedAssetId) {
     await conn.commit()
     return getCheckoutDetails(paymentId)
   } catch (err) {
-    await conn.rollback()
+    if (['RISK_KYC_REQUIRED', 'RISK_MANUAL_REVIEW', 'RISK_REJECTED'].includes(err.code)) {
+      await conn.commit()
+    } else {
+      await conn.rollback()
+    }
     throw err
   } finally {
     conn.release()
@@ -530,6 +600,14 @@ const createOrUpdateSimulatedSettlement = async (conn, payment) => {
 
 export async function submitSepoliaTransactionHash(paymentId, txHash) {
   const payment = await getPaymentForTxSubmission(paymentId)
+  if (['SETTLED', 'PAID_OUT'].includes(payment.status)) {
+    return {
+      status: 'CONFIRMED',
+      paymentStatus: payment.status,
+    }
+  }
+
+  await ensureRiskAllowsPayment(paymentId, { payment, stage: 'PRE_PAYMENT' })
 
   if (payment.supported_asset_id !== ETH_SEPOLIA_ASSET_ID || payment.network !== 'ETH_SEPOLIA') {
     throw Object.assign(new Error('Only ETH Sepolia payments support manual transaction verification in this flow'), {
@@ -744,6 +822,42 @@ export async function submitSepoliaTransactionHash(paymentId, txHash) {
       },
     })
 
+    const postPaymentRisk = await assessPaymentRisk(paymentId, {
+      stage: 'POST_PAYMENT',
+      walletAddress: verification.fromAddress || verification.transaction?.from || null,
+    })
+
+    if (postPaymentRisk.decision !== 'ALLOW') {
+      const nextStatus = getRiskBlockedStatus(postPaymentRisk.decision) || 'MANUAL_REVIEW_REQUIRED'
+      await conn.query(
+        `UPDATE payments
+         SET status = ?
+         WHERE payment_id = ?`,
+        [nextStatus, paymentId]
+      )
+
+      await insertAuditLog(conn, {
+        paymentId,
+        merchantId: lockedPayment.merchant_id,
+        blockchainTransactionId,
+        action: 'PAYMENT_POST_RISK_BLOCKED',
+        details: postPaymentRisk,
+      })
+
+      await updateWalletProfileAfterPayment({
+        walletAddress: postPaymentRisk.walletAddress,
+        succeeded: false,
+      })
+
+      await conn.commit()
+      return {
+        status: postPaymentRisk.decision,
+        paymentStatus: nextStatus,
+        risk: postPaymentRisk,
+        error: buildRiskError(postPaymentRisk).message,
+      }
+    }
+
     await conn.query(
       `UPDATE payments
        SET status = 'CONVERTED_TO_SGD',
@@ -787,6 +901,11 @@ export async function submitSepoliaTransactionHash(paymentId, txHash) {
       },
     })
 
+    await updateWalletProfileAfterPayment({
+      walletAddress: postPaymentRisk.walletAddress,
+      succeeded: true,
+    })
+
     await conn.commit()
 
     return {
@@ -796,6 +915,7 @@ export async function submitSepoliaTransactionHash(paymentId, txHash) {
       confirmations: verification.confirmations,
       amountEth: verification.amountEth,
       settlement,
+      risk: postPaymentRisk,
     }
   } catch (err) {
     await conn.rollback()
@@ -807,6 +927,28 @@ export async function submitSepoliaTransactionHash(paymentId, txHash) {
 
 export async function detectSepoliaPayment(paymentId) {
   const payment = await getPaymentForTxSubmission(paymentId)
+  if (['SETTLED', 'PAID_OUT'].includes(payment.status)) {
+    return {
+      status: 'CONFIRMED',
+      paymentStatus: payment.status,
+      checkout: await getCheckoutDetails(paymentId),
+    }
+  }
+
+  try {
+    await ensureRiskAllowsPayment(paymentId, { payment, stage: 'PRE_PAYMENT' })
+  } catch (err) {
+    if (['RISK_KYC_REQUIRED', 'RISK_MANUAL_REVIEW', 'RISK_REJECTED'].includes(err.code)) {
+      return {
+        status: err.risk?.decision || 'RISK_BLOCKED',
+        paymentStatus: getRiskBlockedStatus(err.risk?.decision) || payment.status,
+        message: err.message,
+        risk: err.risk,
+        checkout: await getCheckoutDetails(paymentId),
+      }
+    }
+    throw err
+  }
 
   if (payment.supported_asset_id !== ETH_SEPOLIA_ASSET_ID || payment.network !== 'ETH_SEPOLIA') {
     throw Object.assign(new Error('Only ETH Sepolia payments support auto detection in this flow'), {
@@ -818,14 +960,6 @@ export async function detectSepoliaPayment(paymentId) {
     throw Object.assign(new Error('Payment has no active ETH Sepolia quote'), {
       code: 'PAYMENT_NOT_READY',
     })
-  }
-
-  if (['SETTLED', 'PAID_OUT'].includes(payment.status)) {
-    return {
-      status: 'CONFIRMED',
-      paymentStatus: payment.status,
-      checkout: await getCheckoutDetails(paymentId),
-    }
   }
 
   if (!['AWAITING_PAYMENT', 'PAYMENT_DETECTED', 'CONFIRMING', 'UNDERPAID'].includes(payment.status)) {

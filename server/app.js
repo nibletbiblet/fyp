@@ -6,7 +6,12 @@ import pool from './config/db.js'
 import { authenticateToken } from './middleware/auth.js'
 import authRoutes from './routes/authRoutes.js'
 import paymentRoutes from './routes/paymentRoutes.js'
+import identityReviewRoutes from './routes/identityReviewRoutes.js'
+import riskRoutes from './routes/riskRoutes.js'
 import { startSettlementWorker } from './services/settlementWorker.js'
+import { ensureKycSchema } from './services/identityReviewService.js'
+import { ensureMainSchema } from './services/schemaService.js'
+import { ensureRiskSchema } from './services/riskService.js'
 
 export const app = express()
 
@@ -24,6 +29,9 @@ app.get('/health', (_req, res) => {
 
 app.use('/api/auth', authRoutes)
 app.use('/api/payments', paymentRoutes)
+app.use('/api/identity-review', identityReviewRoutes)
+app.use('/api/kyc', identityReviewRoutes)
+app.use('/api/risk', riskRoutes)
 
 app.get('/api/dashboard/stats', authenticateToken, async (req, res) => {
   try {
@@ -40,7 +48,7 @@ app.get('/api/dashboard/stats', authenticateToken, async (req, res) => {
       `SELECT
          COUNT(*) AS total_count,
          SUM(CASE WHEN status = 'SETTLED' THEN 1 ELSE 0 END) AS settled_count,
-         SUM(CASE WHEN status IN ('AWAITING_PAYMENT', 'PAYMENT_DETECTED', 'CONFIRMING') THEN 1 ELSE 0 END) AS pending_count
+         SUM(CASE WHEN status IN ('AWAITING_CRYPTO_SELECTION', 'AWAITING_PAYMENT', 'PAYMENT_DETECTED', 'CONFIRMING', 'KYC_REQUIRED', 'MANUAL_REVIEW_REQUIRED') THEN 1 ELSE 0 END) AS pending_count
        FROM payments
        WHERE merchant_id = ?`,
       [req.merchantId]
@@ -65,9 +73,24 @@ app.get('/api/dashboard/stats', authenticateToken, async (req, res) => {
 app.get('/api/dashboard/payments', authenticateToken, async (req, res) => {
   try {
     const [rows] = await pool.query(
-      `SELECT p.*, s.net_settlement_sgd_amount, s.provider_fee_sgd, s.platform_fee_sgd
+      `SELECT
+         p.*,
+         s.net_settlement_sgd_amount,
+         s.provider_fee_sgd,
+         s.platform_fee_sgd,
+         r.score AS risk_severity_value,
+         r.risk_level,
+         r.decision AS risk_decision
        FROM payments p
        LEFT JOIN settlements s ON s.payment_id = p.payment_id
+       LEFT JOIN risk_assessments r
+         ON r.risk_assessment_id = (
+           SELECT r2.risk_assessment_id
+           FROM risk_assessments r2
+           WHERE r2.payment_id = p.payment_id
+           ORDER BY r2.created_at DESC
+           LIMIT 1
+         )
        WHERE p.merchant_id = ?
        ORDER BY p.created_at DESC`,
       [req.merchantId]
@@ -79,4 +102,7 @@ app.get('/api/dashboard/payments', authenticateToken, async (req, res) => {
   }
 })
 
+await ensureMainSchema()
+await ensureRiskSchema()
+await ensureKycSchema()
 startSettlementWorker()

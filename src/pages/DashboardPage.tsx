@@ -34,6 +34,9 @@ interface PaymentRecord {
   net_settlement_sgd_amount: number | null
   provider_fee_sgd: number | null
   platform_fee_sgd: number | null
+  risk_severity_value: number | null
+  risk_level: string | null
+  risk_decision: string | null
   created_at: string
   settled_at: string | null
 }
@@ -273,6 +276,7 @@ export default function DashboardPage() {
 
   useEffect(() => {
     if (!modalOpen || !createdPayment?.payment_id) return
+    if (!createdPayment.receiving_address) return
     if (['SETTLED', 'PAID_OUT', 'EXPIRED', 'FAILED'].includes(createdPayment.status || '')) return
 
     detectCreatedPayment()
@@ -326,7 +330,7 @@ export default function DashboardPage() {
         const checkoutPath = payment.checkoutUrl || `/checkout/${payment.payment_id}`
         setCreatedPayment(payment)
         setCreatedLink(window.location.origin + checkoutPath)
-        setDetectionMessage('Waiting for Sepolia payment...')
+        setDetectionMessage(payment.receiving_address ? 'Waiting for Sepolia payment...' : 'Identity review is required before crypto payment can start.')
         setAmountSgd('')
         setMerchantOrderReference('')
         setDescription('')
@@ -431,7 +435,8 @@ export default function DashboardPage() {
     if (status === 'ACTIVE_ONBOARDED' || status === 'SETTLED') return 'onboarded'
     if (status === 'CONFIRMED' || status === 'CONVERTED_TO_SGD') return 'confirming'
     if (status === 'PAYMENT_DETECTED' || status === 'CONFIRMING') return 'detecting'
-    if (status === 'ACTIVE_UNVERIFIED' || status === 'CREATED' || status === 'AWAITING_PAYMENT') return 'unverified'
+    if (status === 'ACTIVE_UNVERIFIED' || status === 'CREATED' || status === 'AWAITING_PAYMENT' || status === 'AWAITING_CRYPTO_SELECTION' || status === 'KYC_REQUIRED') return 'unverified'
+    if (status === 'MANUAL_REVIEW_REQUIRED') return 'detecting'
     if (status === 'FAILED' || status === 'EXPIRED') return 'suspended'
     return 'suspended'
   }
@@ -472,6 +477,7 @@ export default function DashboardPage() {
   const isOnboarded = merchant?.status === 'ACTIVE_ONBOARDED'
   const successRate = stats.totalCount > 0 ? Math.round((stats.settledCount / stats.totalCount) * 100) : 0
   const createdInstructions = createdPayment ? parsePaymentInstructions(createdPayment.payment_instructions) : {}
+  const createdNeedsReview = Boolean(createdPayment && !createdPayment.receiving_address && createdPayment.status && createdPayment.status !== 'AWAITING_PAYMENT')
   const createdExpectedAmount = createdPayment?.expected_crypto_amount
     ? Number(createdPayment.expected_crypto_amount).toFixed(6)
     : ''
@@ -773,11 +779,11 @@ export default function DashboardPage() {
         {isOnboarded && (
           <div className="infra-grid dashboard-fadein">
             <div className="infra-card">
-              <div className="infra-card-label">Container ID (Triple-A)</div>
+              <div className="infra-card-label">Gateway Account ID</div>
               <div className="infra-card-value">{merchant?.container_id || '—'}</div>
             </div>
             <div className="infra-card">
-              <div className="infra-card-label">Wallet ID (Multi-Currency)</div>
+              <div className="infra-card-label">Settlement Wallet ID</div>
               <div className="infra-card-value">{merchant?.wallet_id || '—'}</div>
             </div>
           </div>
@@ -821,6 +827,7 @@ export default function DashboardPage() {
                     <th>Gross (SGD)</th>
                     <th>Payout Net (SGD)</th>
                     <th>Fees (SGD)</th>
+                    <th>Risk</th>
                     <th>Status</th>
                     <th>Time</th>
                     <th>Action</th>
@@ -871,6 +878,19 @@ export default function DashboardPage() {
                           {(p.provider_fee_sgd !== null && p.platform_fee_sgd !== null)
                             ? `S$ ${(Number(p.provider_fee_sgd) + Number(p.platform_fee_sgd)).toFixed(2)}`
                             : '—'}
+                        </td>
+                        <td>
+                          {p.risk_level ? (
+                            <span
+                              className={`status-badge ${p.risk_decision === 'ALLOW' ? 'onboarded' : p.risk_decision === 'KYC_REQUIRED' ? 'unverified' : 'suspended'}`}
+                              style={{ fontSize: 10 }}
+                              title={p.risk_decision || ''}
+                            >
+                              {p.risk_level}
+                            </span>
+                          ) : (
+                            <span style={{ color: 'rgba(255,255,255,0.2)' }}>Not assessed</span>
+                          )}
                         </td>
                         <td>
                           <span className={`status-badge ${getStatusBadge(p.status)}`} style={{ fontSize: 10 }}>
@@ -927,7 +947,7 @@ export default function DashboardPage() {
                   <td>{merchant.bank_name || '—'} {merchant.bank_account_last4 ? `(****${merchant.bank_account_last4})` : ''}</td>
                 </tr>
                 <tr>
-                  <td style={{ color: 'rgba(255,255,255,0.35)', fontWeight: 600 }}>KYC Status</td>
+                  <td style={{ color: 'rgba(255,255,255,0.35)', fontWeight: 600 }}>Verification Status</td>
                   <td>{merchant.kyc_status}</td>
                 </tr>
                 <tr>
@@ -1097,7 +1117,28 @@ export default function DashboardPage() {
                   </div>
                 )}
 
-                {createdPayment && (
+                {createdPayment && createdNeedsReview && (
+                  <div style={{ display: 'grid', gap: 10, marginBottom: 18 }}>
+                    <div className="infra-card">
+                      <div className="infra-card-label">SGD Amount</div>
+                      <div className="infra-card-value">S$ {Number(createdPayment.amount_sgd).toFixed(2)}</div>
+                    </div>
+                    <div style={{
+                      padding: 12,
+                      border: '1px solid rgba(240,165,0,0.25)',
+                      borderRadius: 8,
+                      color: '#f0a500',
+                      background: 'rgba(240,165,0,0.06)',
+                      fontSize: 12,
+                      lineHeight: 1.6,
+                    }}>
+                      Risk policy review is required before a crypto quote and wallet QR can be generated.
+                      Share the checkout link with the customer so they can complete the required identity step.
+                    </div>
+                  </div>
+                )}
+
+                {createdPayment && !createdNeedsReview && (
                   <div style={{ display: 'grid', gap: 10, marginBottom: 18 }}>
                     <div className="infra-card">
                       <div className="infra-card-label">SGD Amount</div>

@@ -1,7 +1,6 @@
 /**
  * mockConversionProvider.js
- * Represents a MAS-licensed Digital Payment Token provider (e.g. Triple-A).
- * Encapsulates rate conversions and platform fee logic.
+ * Encapsulates simulated crypto-to-SGD conversion and platform fee logic.
  */
 
 const EXCHANGE_RATE_SGD_PER_USD = 1.34;

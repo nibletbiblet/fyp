@@ -52,12 +52,53 @@ interface CheckoutPayment {
 interface CheckoutResponse {
   payment: CheckoutPayment
   supportedAssets: SupportedAsset[]
+  kyc?: KycCase
+  risk?: RiskAssessment | null
+}
+
+interface RiskAssessment {
+  severityScore?: number
+  riskLevel: string
+  decision: string
+  rules: Array<{
+    code: string
+    severity: string
+    message: string
+  }>
+  reasons?: Array<{
+    code: string
+    points?: number
+    severity?: string
+    message: string
+  }>
 }
 
 interface DetectedTransaction {
   txHash?: string
   amountEth?: string
   confirmations?: number
+}
+
+interface KycCase {
+  required: boolean
+  status: string
+  paymentId: string
+  customer?: {
+    name?: string | null
+    email?: string | null
+    dob?: string | null
+    gender?: string | null
+    countryCode?: string | null
+  }
+  singpass?: {
+    status?: string | null
+  }
+  poi?: {
+    status?: string | null
+    fileName?: string | null
+    previewDataUrl?: string | null
+    declinedReason?: string | null
+  }
 }
 
 function parseInstructions(value: CheckoutPayment['payment_instructions']): PaymentInstructions {
@@ -98,6 +139,15 @@ export default function CheckoutPage() {
   const [detectionMessage, setDetectionMessage] = useState('')
   const [detectedTransaction, setDetectedTransaction] = useState<DetectedTransaction | null>(null)
   const [errorMsg, setErrorMsg] = useState('')
+  const [kycName, setKycName] = useState('John Doe')
+  const [kycEmail, setKycEmail] = useState('johndoe@example.com')
+  const [kycDob, setKycDob] = useState('1992-10-10')
+  const [kycGender, setKycGender] = useState('Male')
+  const [kycCountryCode, setKycCountryCode] = useState('SG')
+  const [kycFile, setKycFile] = useState<File | null>(null)
+  const [kycFilePreview, setKycFilePreview] = useState('')
+  const [kycSubmitting, setKycSubmitting] = useState(false)
+  const [kycMessage, setKycMessage] = useState('')
 
   const loadCheckout = async () => {
     if (!paymentId) return
@@ -178,14 +228,96 @@ export default function CheckoutPage() {
       })
       const data = await res.json()
       if (!res.ok) {
+        if (data.risk) {
+          setCheckout(prev => prev ? { ...prev, risk: data.risk } : prev)
+        }
         setErrorMsg(data.error || 'Failed to select payment asset')
+        await loadCheckout()
         return
       }
-      setCheckout({ payment: data.payment, supportedAssets: data.supportedAssets })
+      setCheckout({ payment: data.payment, supportedAssets: data.supportedAssets, kyc: data.kyc, risk: data.risk })
     } catch {
       setErrorMsg('Network error - could not select payment asset')
     } finally {
       setSelectingAssetId('')
+    }
+  }
+
+  const readFileAsDataUrl = (file: File) => new Promise<string>((resolve, reject) => {
+    const reader = new FileReader()
+    reader.addEventListener('load', () => resolve(String(reader.result || '')))
+    reader.addEventListener('error', () => reject(new Error('Could not read POI image')))
+    reader.readAsDataURL(file)
+  })
+
+  const handleKycFileChange = async (file: File | null) => {
+    setKycFile(file)
+    setKycFilePreview('')
+    setKycMessage('')
+    if (!file) return
+    if (!['image/jpeg', 'image/jpg'].includes(file.type)) {
+      setKycMessage('POI must be a JPEG/JPG image.')
+      setKycFile(null)
+      return
+    }
+    if (file.size > 3 * 1024 * 1024) {
+      setKycMessage('POI file must be 3 MB or smaller.')
+      setKycFile(null)
+      return
+    }
+    setKycFilePreview(await readFileAsDataUrl(file))
+  }
+
+  const handleSubmitKyc = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!paymentId || !kycFile || !kycFilePreview) {
+      setKycMessage('Complete the profile and choose a JPEG POI image first.')
+      return
+    }
+
+    setKycSubmitting(true)
+    setKycMessage('')
+    setErrorMsg('')
+    try {
+      const profile = {
+        name: kycName,
+        email: kycEmail,
+        dob: kycDob,
+        gender: kycGender,
+        countryCode: kycCountryCode,
+      }
+      let res = await fetch(`/api/identity-review/payments/${paymentId}/profile`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(profile),
+      })
+      let data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Could not save KYC profile')
+
+      res = await fetch(`/api/identity-review/payments/${paymentId}/poi`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...profile,
+          fileName: kycFile.name,
+          fileType: kycFile.type,
+          fileSizeBytes: kycFile.size,
+          previewDataUrl: kycFilePreview,
+        }),
+      })
+      data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Could not upload POI')
+
+      res = await fetch(`/api/identity-review/payments/${paymentId}/singpass`, { method: 'POST' })
+      data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Could not complete mock Singpass')
+
+      setCheckout(prev => prev ? { ...prev, kyc: data.kyc } : prev)
+      setKycMessage('KYC submitted. Waiting for admin POI approval.')
+    } catch (err) {
+      setKycMessage(err instanceof Error ? err.message : 'KYC submission failed')
+    } finally {
+      setKycSubmitting(false)
     }
   }
 
@@ -268,6 +400,9 @@ export default function CheckoutPage() {
   }
 
   const { payment, supportedAssets } = checkout
+  const kyc = checkout.kyc
+  const risk = checkout.risk
+  const kycBlocksPayment = Boolean(kyc?.required && kyc.status !== 'VERIFIED')
   const instructions = parseInstructions(payment.payment_instructions)
   const selectedAsset = supportedAssets.find((asset) => asset.supported_asset_id === payment.supported_asset_id)
   const hasPaymentInstructions = Boolean(payment.supported_asset_id && payment.receiving_address)
@@ -326,7 +461,77 @@ export default function CheckoutPage() {
           </div>
         )}
 
-        {!hasPaymentInstructions && (
+        {risk && (
+          <div className="dashboard-table-wrap" style={{ marginBottom: 24 }}>
+            <div className="dashboard-table-header">
+              <h3>Risk assessment</h3>
+              <span style={{ fontSize: 11, color: risk.decision === 'ALLOW' ? '#22c55e' : risk.decision === 'KYC_REQUIRED' ? '#f0a500' : '#ef4444' }}>
+                {risk.riskLevel} / {risk.decision.replace(/_/g, ' ')}
+              </span>
+            </div>
+            <div style={{ display: 'grid', gap: 8 }}>
+              {(risk.rules || []).length === 0 ? (
+                <div style={{ color: 'rgba(255,255,255,0.45)', fontSize: 12 }}>No risk rules were triggered.</div>
+              ) : risk.rules.map((rule) => (
+                <div key={rule.code} style={{ display: 'flex', justifyContent: 'space-between', gap: 12, color: 'rgba(255,255,255,0.62)', fontSize: 12 }}>
+                  <span>{rule.message}</span>
+                  <strong style={{ color: rule.severity === 'MITIGATING' ? '#22c55e' : rule.severity === 'REJECT' || rule.severity === 'HIGH' ? '#ef4444' : '#f0a500' }}>
+                    {rule.severity.replace(/_/g, ' ')}
+                  </strong>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {kyc?.required && (
+          <div className="dashboard-table-wrap" style={{ marginBottom: 24 }}>
+            <div className="dashboard-table-header">
+              <h3>Identity review required</h3>
+              <span style={{ fontSize: 11, color: kyc.status === 'VERIFIED' ? '#22c55e' : '#f0a500' }}>
+                {kyc.status.replace(/_/g, ' ')}
+              </span>
+            </div>
+
+            {kyc.status !== 'VERIFIED' && (
+              <form onSubmit={handleSubmitKyc} style={{ display: 'grid', gap: 14 }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
+                  <div className="form-group"><label className="form-label">Full name</label><input className="form-input" value={kycName} onChange={(e) => setKycName(e.target.value)} required /></div>
+                  <div className="form-group"><label className="form-label">Email</label><input className="form-input" type="email" value={kycEmail} onChange={(e) => setKycEmail(e.target.value)} required /></div>
+                  <div className="form-group"><label className="form-label">Date of birth</label><input className="form-input" type="date" value={kycDob} onChange={(e) => setKycDob(e.target.value)} required /></div>
+                  <div className="form-group"><label className="form-label">Gender</label><input className="form-input" value={kycGender} onChange={(e) => setKycGender(e.target.value)} /></div>
+                  <div className="form-group"><label className="form-label">Country</label><input className="form-input" maxLength={2} value={kycCountryCode} onChange={(e) => setKycCountryCode(e.target.value.toUpperCase())} /></div>
+                </div>
+
+                <div className="form-group">
+                  <label className="form-label">Proof of identity JPEG/JPG</label>
+                  <input className="form-input" type="file" accept="image/jpeg,.jpg,.jpeg" onChange={(e) => handleKycFileChange(e.target.files?.[0] || null)} />
+                </div>
+
+                {kycFilePreview && (
+                  <img src={kycFilePreview} alt="POI preview" style={{ width: '100%', maxHeight: 260, objectFit: 'contain', borderRadius: 10, border: '1px solid rgba(255,255,255,0.08)', background: '#fff' }} />
+                )}
+
+                <button className="btn-onboarding-primary" type="submit" disabled={kycSubmitting}>
+                  {kycSubmitting ? 'Submitting identity review...' : 'Submit identity review with mock Singpass'}
+                </button>
+                <p style={{ margin: 0, color: 'rgba(255,255,255,0.48)', fontSize: 12 }}>
+                  After submission, open <a href="/admin-identity-review.html" target="_blank" rel="noreferrer" style={{ color: '#f0a500' }}>Admin Identity Review Dashboard</a> to approve or reject the POI.
+                </p>
+              </form>
+            )}
+
+            {kyc.status === 'VERIFIED' && (
+              <div style={{ padding: 12, border: '1px solid #22c55e', borderRadius: 8, color: '#22c55e', background: 'rgba(34,197,94,0.06)' }}>
+                Identity review approved. You can now select testnet crypto and continue payment.
+              </div>
+            )}
+
+            {kycMessage && <div className="form-error" style={{ marginTop: 12 }}>{kycMessage}</div>}
+          </div>
+        )}
+
+        {!hasPaymentInstructions && !kycBlocksPayment && (
           <div className="dashboard-table-wrap" style={{ marginBottom: 24 }}>
             <div className="dashboard-table-header">
               <h3>Select testnet crypto</h3>
