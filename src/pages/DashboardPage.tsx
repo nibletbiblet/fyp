@@ -34,6 +34,12 @@ interface PaymentRecord {
   net_settlement_sgd_amount: number | null
   provider_fee_sgd: number | null
   platform_fee_sgd: number | null
+  settlement_provider_reference: string | null
+  settlement_status: string | null
+  payout_reference: string | null
+  payout_fee_sgd: number | null
+  net_payout_sgd_amount: number | null
+  payout_status: string | null
   risk_severity_value: number | null
   risk_level: string | null
   risk_decision: string | null
@@ -357,7 +363,7 @@ export default function DashboardPage() {
       setDetectedTransaction(data.transaction)
     }
     if (data.status === 'CONFIRMED') {
-      setDetectionMessage('Payment confirmed. Simulated SGD settlement completed.')
+      setDetectionMessage('Payment confirmed. SGD conversion created; payout batch processing will continue automatically.')
       fetchDashboardData()
     } else if (data.status === 'EXPIRED') {
       setDetectionMessage('Payment expired before Sepolia payment was detected.')
@@ -397,7 +403,7 @@ export default function DashboardPage() {
       })
       const data = await res.json()
       if (res.ok && data.status === 'CONFIRMED') {
-        setDetectionMessage('Payment confirmed. Simulated SGD settlement completed.')
+        setDetectionMessage('Payment confirmed. SGD conversion created; payout batch processing will continue automatically.')
         setDetectedTransaction({
           txHash: data.txHash,
           amountEth: data.amountEth,
@@ -827,6 +833,7 @@ export default function DashboardPage() {
                     <th>Gross (SGD)</th>
                     <th>Payout Net (SGD)</th>
                     <th>Fees (SGD)</th>
+                    <th>Settlement</th>
                     <th>Risk</th>
                     <th>Status</th>
                     <th>Time</th>
@@ -876,8 +883,22 @@ export default function DashboardPage() {
                           fontSize: 12,
                         }}>
                           {(p.provider_fee_sgd !== null && p.platform_fee_sgd !== null)
-                            ? `S$ ${(Number(p.provider_fee_sgd) + Number(p.platform_fee_sgd)).toFixed(2)}`
+                            ? `S$ ${(Number(p.provider_fee_sgd) + Number(p.platform_fee_sgd) + Number(p.payout_fee_sgd || 0)).toFixed(2)}`
                             : '—'}
+                        </td>
+                        <td>
+                          {p.settlement_status ? (
+                            <div style={{ display: 'grid', gap: 4 }}>
+                              <span className={`status-badge ${p.payout_status === 'PAID_OUT' ? 'onboarded' : p.settlement_status === 'SETTLED' ? 'confirming' : 'detecting'}`} style={{ fontSize: 10 }}>
+                                {(p.payout_status || p.settlement_status).replace(/_/g, ' ')}
+                              </span>
+                              <span style={{ color: 'rgba(255,255,255,0.35)', fontSize: 10, fontFamily: "'Space Mono', monospace" }}>
+                                {p.payout_reference || p.settlement_provider_reference || '—'}
+                              </span>
+                            </div>
+                          ) : (
+                            <span style={{ color: 'rgba(255,255,255,0.2)' }}>—</span>
+                          )}
                         </td>
                         <td>
                           {p.risk_level ? (

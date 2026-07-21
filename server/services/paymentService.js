@@ -9,13 +9,13 @@ import {
   toWeiString,
   verifySepoliaEthTransaction,
 } from './paymentProviders/ethSepoliaProvider.js'
-import { calculateFees } from './paymentProviders/mockConversionProvider.js'
 import { getPaymentKyc, isPaymentKycVerified } from './identityReviewService.js'
 import {
   assessPaymentRisk,
   getLatestRiskAssessment,
   updateWalletProfileAfterPayment,
 } from './riskService.js'
+import { createOrUpdateConvertedSettlement } from './settlementService.js'
 
 const PAYMENT_REQUEST_TTL_MS = 24 * 60 * 60 * 1000
 const ETH_SEPOLIA_ASSET_ID = 'asset-eth-sepolia'
@@ -532,75 +532,9 @@ const upsertBlockchainTransaction = async (conn, { payment, txHash, verification
   return rows[0]?.blockchain_transaction_id || blockchainTransactionId
 }
 
-const createOrUpdateSimulatedSettlement = async (conn, payment) => {
-  const [existing] = await conn.query(
-    `SELECT settlement_id
-     FROM settlements
-     WHERE payment_id = ?`,
-    [payment.payment_id]
-  )
-
-  const { processorFee, networkFee, netSettlementAmount } = calculateFees(Number(payment.amount_sgd))
-
-  if (existing.length > 0) {
-    await conn.query(
-      `UPDATE settlements
-       SET gross_sgd_amount = ?,
-           provider_fee_sgd = ?,
-           platform_fee_sgd = ?,
-           net_settlement_sgd_amount = ?,
-           conversion_rate = ?,
-           status = 'SETTLED',
-           converted_at = COALESCE(converted_at, CURRENT_TIMESTAMP),
-           settled_at = COALESCE(settled_at, CURRENT_TIMESTAMP)
-       WHERE settlement_id = ?`,
-      [
-        payment.amount_sgd,
-        processorFee,
-        networkFee,
-        netSettlementAmount,
-        payment.quoted_rate_sgd_per_crypto,
-        existing[0].settlement_id,
-      ]
-    )
-    return {
-      settlementId: existing[0].settlement_id,
-      processorFee,
-      platformFee: networkFee,
-      netSettlementAmount,
-    }
-  }
-
-  const settlementId = crypto.randomUUID()
-  await conn.query(
-    `INSERT INTO settlements (
-      settlement_id, payment_id, merchant_id, gross_sgd_amount,
-      provider_fee_sgd, platform_fee_sgd, net_settlement_sgd_amount,
-      conversion_rate, status, converted_at, settled_at, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'SETTLED', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
-    [
-      settlementId,
-      payment.payment_id,
-      payment.merchant_id,
-      payment.amount_sgd,
-      processorFee,
-      networkFee,
-      netSettlementAmount,
-      payment.quoted_rate_sgd_per_crypto,
-    ]
-  )
-
-  return {
-    settlementId,
-    processorFee,
-    platformFee: networkFee,
-    netSettlementAmount,
-  }
-}
-
 export async function submitSepoliaTransactionHash(paymentId, txHash) {
   const payment = await getPaymentForTxSubmission(paymentId)
-  if (['SETTLED', 'PAID_OUT'].includes(payment.status)) {
+  if (['CONVERTED_TO_SGD', 'SETTLED', 'PAID_OUT'].includes(payment.status)) {
     return {
       status: 'CONFIRMED',
       paymentStatus: payment.status,
@@ -858,47 +792,8 @@ export async function submitSepoliaTransactionHash(paymentId, txHash) {
       }
     }
 
-    await conn.query(
-      `UPDATE payments
-       SET status = 'CONVERTED_TO_SGD',
-           converted_at = CURRENT_TIMESTAMP
-       WHERE payment_id = ?`,
-      [paymentId]
-    )
-
-    await insertAuditLog(conn, {
-      paymentId,
-      merchantId: lockedPayment.merchant_id,
+    const settlement = await createOrUpdateConvertedSettlement(conn, lockedPayment, {
       blockchainTransactionId,
-      action: 'CRYPTO_CONVERTED_TO_SGD',
-      details: {
-        provider: 'Self-simulated Sepolia ETH provider',
-        rateSgdPerEth: lockedPayment.quoted_rate_sgd_per_crypto,
-      },
-    })
-
-    const settlement = await createOrUpdateSimulatedSettlement(conn, lockedPayment)
-
-    await conn.query(
-      `UPDATE payments
-       SET status = 'SETTLED',
-           settled_at = CURRENT_TIMESTAMP
-       WHERE payment_id = ?`,
-      [paymentId]
-    )
-
-    await insertAuditLog(conn, {
-      paymentId,
-      merchantId: lockedPayment.merchant_id,
-      blockchainTransactionId,
-      action: 'PAYMENT_SETTLED',
-      details: {
-        settlementId: settlement.settlementId,
-        grossSgdAmount: lockedPayment.amount_sgd,
-        providerFeeSgd: settlement.processorFee,
-        platformFeeSgd: settlement.platformFee,
-        netSettlementSgdAmount: settlement.netSettlementAmount,
-      },
     })
 
     await updateWalletProfileAfterPayment({
@@ -910,7 +805,7 @@ export async function submitSepoliaTransactionHash(paymentId, txHash) {
 
     return {
       status: 'CONFIRMED',
-      paymentStatus: 'SETTLED',
+      paymentStatus: 'CONVERTED_TO_SGD',
       txHash: normalizedTxHash,
       confirmations: verification.confirmations,
       amountEth: verification.amountEth,
@@ -927,7 +822,7 @@ export async function submitSepoliaTransactionHash(paymentId, txHash) {
 
 export async function detectSepoliaPayment(paymentId) {
   const payment = await getPaymentForTxSubmission(paymentId)
-  if (['SETTLED', 'PAID_OUT'].includes(payment.status)) {
+  if (['CONVERTED_TO_SGD', 'SETTLED', 'PAID_OUT'].includes(payment.status)) {
     return {
       status: 'CONFIRMED',
       paymentStatus: payment.status,

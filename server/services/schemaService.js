@@ -42,6 +42,12 @@ const archiveConflictingTable = async (tableName, requiredColumn) => {
   console.log(`Archived old ${tableName} table as ${legacyName}`)
 }
 
+const addColumnIfMissing = async (tableName, columnName, definition) => {
+  if (!(await tableExists(tableName))) return
+  if (await columnExists(tableName, columnName)) return
+  await pool.query(`ALTER TABLE \`${tableName}\` ADD COLUMN ${definition}`)
+}
+
 const createCoreTables = async () => {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS merchants (
@@ -236,6 +242,7 @@ const createCoreTables = async () => {
       status VARCHAR(40) NOT NULL DEFAULT 'PENDING_CONVERSION',
       converted_at TIMESTAMP NULL DEFAULT NULL,
       settled_at TIMESTAMP NULL DEFAULT NULL,
+      paid_out_at TIMESTAMP NULL DEFAULT NULL,
       failed_at TIMESTAMP NULL DEFAULT NULL,
       failure_reason VARCHAR(255) DEFAULT NULL,
       created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -300,6 +307,22 @@ const seedSupportedAssets = async () => {
   )
 }
 
+const migrateCoreTables = async () => {
+  await addColumnIfMissing('settlements', 'paid_out_at', '`paid_out_at` TIMESTAMP NULL DEFAULT NULL AFTER `settled_at`')
+  if (await tableExists('settlements')) {
+    await pool.query(
+      `ALTER TABLE settlements
+       MODIFY COLUMN status VARCHAR(40) NOT NULL DEFAULT 'PENDING_CONVERSION'`,
+    )
+  }
+  if (await tableExists('payments')) {
+    await pool.query(
+      `ALTER TABLE payments
+       MODIFY COLUMN status VARCHAR(40) NOT NULL DEFAULT 'CREATED'`,
+    )
+  }
+}
+
 export async function ensureMainSchema() {
   await archiveConflictingTable('merchants', 'id')
   await archiveConflictingTable('merchant_users', 'id')
@@ -311,5 +334,6 @@ export async function ensureMainSchema() {
   await archiveConflictingTable('audit_logs', 'audit_log_id')
 
   await createCoreTables()
+  await migrateCoreTables()
   await seedSupportedAssets()
 }

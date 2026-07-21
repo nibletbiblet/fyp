@@ -40,15 +40,15 @@ app.get('/api/dashboard/stats', authenticateToken, async (req, res) => {
               COALESCE(SUM(provider_fee_sgd + platform_fee_sgd), 0) AS total_fees,
               COALESCE(SUM(net_settlement_sgd_amount), 0) AS total_net
        FROM settlements
-       WHERE merchant_id = ?`,
+       WHERE merchant_id = ? AND status IN ('SETTLED', 'PAID_OUT')`,
       [req.merchantId]
     )
 
     const [countRow] = await pool.query(
       `SELECT
          COUNT(*) AS total_count,
-         SUM(CASE WHEN status = 'SETTLED' THEN 1 ELSE 0 END) AS settled_count,
-         SUM(CASE WHEN status IN ('AWAITING_CRYPTO_SELECTION', 'AWAITING_PAYMENT', 'PAYMENT_DETECTED', 'CONFIRMING', 'KYC_REQUIRED', 'MANUAL_REVIEW_REQUIRED') THEN 1 ELSE 0 END) AS pending_count
+         SUM(CASE WHEN status IN ('SETTLED', 'PAID_OUT') THEN 1 ELSE 0 END) AS settled_count,
+         SUM(CASE WHEN status IN ('AWAITING_CRYPTO_SELECTION', 'AWAITING_PAYMENT', 'PAYMENT_DETECTED', 'CONFIRMING', 'CONFIRMED', 'CONVERTED_TO_SGD', 'KYC_REQUIRED', 'MANUAL_REVIEW_REQUIRED') THEN 1 ELSE 0 END) AS pending_count
        FROM payments
        WHERE merchant_id = ?`,
       [req.merchantId]
@@ -78,11 +78,22 @@ app.get('/api/dashboard/payments', authenticateToken, async (req, res) => {
          s.net_settlement_sgd_amount,
          s.provider_fee_sgd,
          s.platform_fee_sgd,
+         s.provider_reference AS settlement_provider_reference,
+         s.status AS settlement_status,
+         s.converted_at AS settlement_converted_at,
+         s.settled_at AS settlement_settled_at,
+         s.paid_out_at AS settlement_paid_out_at,
+         mp.payout_reference,
+         mp.payout_fee_sgd,
+         mp.net_payout_sgd_amount,
+         mp.status AS payout_status,
+         mp.paid_out_at AS payout_paid_out_at,
          r.score AS risk_severity_value,
          r.risk_level,
          r.decision AS risk_decision
        FROM payments p
        LEFT JOIN settlements s ON s.payment_id = p.payment_id
+       LEFT JOIN merchant_payouts mp ON mp.payout_id = s.payout_id
        LEFT JOIN risk_assessments r
          ON r.risk_assessment_id = (
            SELECT r2.risk_assessment_id

@@ -187,7 +187,7 @@ export default function CheckoutPage() {
         setDetectedTransaction(data.transaction)
       }
       if (data.status === 'CONFIRMED') {
-        setDetectionMessage('Payment confirmed. Simulated SGD settlement completed.')
+        setDetectionMessage('Payment confirmed. SGD conversion created; payout batch processing will continue automatically.')
       } else if (data.status === 'EXPIRED') {
         setDetectionMessage('Payment expired before Sepolia payment was detected.')
       } else if (!res.ok && res.status !== 202) {
@@ -341,8 +341,8 @@ export default function CheckoutPage() {
       setVerificationStatus(data.status || '')
 
       if (res.ok && data.status === 'CONFIRMED') {
-        setVerificationMessage('Transaction confirmed on Sepolia. Simulated SGD settlement has been created.')
-        setDetectionMessage('Payment confirmed. Simulated SGD settlement completed.')
+        setVerificationMessage('Transaction confirmed on Sepolia. Simulated SGD conversion has been created.')
+        setDetectionMessage('Payment confirmed. SGD conversion created; payout batch processing will continue automatically.')
         setDetectedTransaction({
           txHash: data.txHash,
           amountEth: data.amountEth,
@@ -734,7 +734,7 @@ export default function CheckoutPage() {
                   fontSize: 12,
                 }}
               >
-                Payment confirmed and simulated SGD settlement completed.
+                Payment confirmed and simulated SGD payout processing has started.
                 {payment.received_crypto_amount ? ` Received ${Number(payment.received_crypto_amount).toFixed(6)} ETH.` : ''}
               </div>
             )}
