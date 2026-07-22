@@ -59,13 +59,29 @@ const getQuoteForAsset = async (asset) => {
 const buildCheckoutUrl = (paymentId) => `/checkout/${paymentId}`
 const buildAbsoluteCheckoutUrl = (paymentId) => `${env.corsOrigin.replace(/\/$/, '')}${buildCheckoutUrl(paymentId)}`
 
+const buildMerchantOrderReference = () => {
+  const now = new Date()
+  const datePart = now.toISOString().slice(0, 10).replace(/-/g, '')
+  const timePart = now.toISOString().slice(11, 19).replace(/:/g, '')
+  const randomPart = crypto.randomBytes(6).toString('hex').toUpperCase()
+  return `PAY-${datePart}-${timePart}-${randomPart}`
+}
+
+const isDuplicateKeyError = (err) => err?.code === 'ER_DUP_ENTRY' || err?.errno === 1062
+
+const buildSepoliaEthPaymentUri = ({ receivingAddress, expectedCryptoAmount }) => {
+  const cleanAddress = String(receivingAddress || '').trim()
+  const weiValue = toWeiString(String(expectedCryptoAmount).trim())
+  return `ethereum:${cleanAddress}@11155111?value=${weiValue}`
+}
+
 const buildWalletPaymentPayload = ({ asset, payment, expectedCryptoAmount, receivingAddress }) => {
   if (asset.network === 'BTC_TESTNET') {
     return `bitcoin:${receivingAddress}?amount=${expectedCryptoAmount}&label=ChainForge&message=${payment.payment_reference}`
   }
 
   if (asset.network === 'ETH_SEPOLIA') {
-    return `ethereum:${receivingAddress}@${asset.chain_id}?value=${toWeiString(expectedCryptoAmount)}`
+    return buildSepoliaEthPaymentUri({ receivingAddress, expectedCryptoAmount })
   }
 
   return JSON.stringify({
@@ -87,63 +103,77 @@ const buildWalletPaymentPayload = ({ asset, payment, expectedCryptoAmount, recei
 export async function createPayment({
   merchantId,
   amountSgd,
-  merchantOrderReference,
   description,
   customerReference,
 }) {
-  const paymentId = crypto.randomUUID()
-  const paymentReference = 'CF-' + Date.now() + '-' + crypto.randomBytes(4).toString('hex').toUpperCase()
-  const expiresAt = new Date(Date.now() + PAYMENT_REQUEST_TTL_MS)
   const conn = await pool.getConnection()
 
   try {
-    await conn.beginTransaction()
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      const paymentId = crypto.randomUUID()
+      const paymentReference = 'CF-' + Date.now() + '-' + crypto.randomBytes(4).toString('hex').toUpperCase()
+      const merchantOrderReference = buildMerchantOrderReference()
+      const expiresAt = new Date(Date.now() + PAYMENT_REQUEST_TTL_MS)
 
-    await conn.query(
-      `INSERT INTO payments (
-        payment_id, merchant_id, payment_reference, merchant_order_reference,
-        description, customer_reference, amount_sgd, status, expires_at,
-        created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, 'AWAITING_CRYPTO_SELECTION', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
-      [
-        paymentId,
-        merchantId,
-        paymentReference,
-        merchantOrderReference || null,
-        description || null,
-        customerReference || null,
-        amountSgd,
-        toMysqlTimestamp(expiresAt),
-      ]
-    )
+      try {
+        await conn.beginTransaction()
 
-    await conn.query(
-      `INSERT INTO audit_logs (payment_id, merchant_id, actor_type, actor_id, action, details, created_at)
-       VALUES (?, ?, 'MERCHANT', ?, 'PAYMENT_CREATED', ?, CURRENT_TIMESTAMP)`,
-      [
-        paymentId,
-        merchantId,
-        merchantId,
-        JSON.stringify({
-          amountSgd,
+        await conn.query(
+          `INSERT INTO payments (
+            payment_id, merchant_id, payment_reference, merchant_order_reference,
+            description, customer_reference, amount_sgd, status, expires_at,
+            created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, 'AWAITING_CRYPTO_SELECTION', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+          [
+            paymentId,
+            merchantId,
+            paymentReference,
+            merchantOrderReference,
+            description || null,
+            customerReference || null,
+            amountSgd,
+            toMysqlTimestamp(expiresAt),
+          ]
+        )
+
+        await conn.query(
+          `INSERT INTO audit_logs (payment_id, merchant_id, actor_type, actor_id, action, details, created_at)
+           VALUES (?, ?, 'MERCHANT', ?, 'PAYMENT_CREATED', ?, CURRENT_TIMESTAMP)`,
+          [
+            paymentId,
+            merchantId,
+            merchantId,
+            JSON.stringify({
+              amountSgd,
+              paymentReference,
+              merchantOrderReference,
+              customerReference: customerReference || null,
+            }),
+          ]
+        )
+
+        await conn.commit()
+        return {
+          paymentId,
           paymentReference,
-          merchantOrderReference: merchantOrderReference || null,
-          customerReference: customerReference || null,
-        }),
-      ]
-    )
-
-    await conn.commit()
-    return {
-      paymentId,
-      paymentReference,
-      status: 'AWAITING_CRYPTO_SELECTION',
-      amountSgd,
-      checkoutUrl: buildCheckoutUrl(paymentId),
+          merchantOrderReference,
+          merchant_order_reference: merchantOrderReference,
+          status: 'AWAITING_CRYPTO_SELECTION',
+          amountSgd,
+          checkoutUrl: buildCheckoutUrl(paymentId),
+        }
+      } catch (err) {
+        await conn.rollback()
+        if (isDuplicateKeyError(err) && attempt < 3) {
+          continue
+        }
+        throw err
+      }
     }
-  } catch (err) {
-    await conn.rollback()
-    throw err
+
+    throw Object.assign(new Error('Could not generate a unique payment reference'), {
+      code: 'PAYMENT_REFERENCE_COLLISION',
+    })
   } finally {
     conn.release()
   }
@@ -271,6 +301,7 @@ export async function selectAsset(paymentId, supportedAssetId) {
       checkoutQrCodeData,
       checkoutQrCodeImageDataUrl,
       walletPaymentQrCodeData,
+      eip681PaymentUri: asset.supported_asset_id === ETH_SEPOLIA_ASSET_ID ? walletPaymentQrCodeData : null,
       walletPaymentQrCodeImageDataUrl: qrCodeImageDataUrl,
       sepoliaCreatedBlockNumber,
       receivingAddress,
@@ -361,6 +392,14 @@ const buildVerificationErrorMessage = (status) => {
     TX_ALREADY_USED: 'This transaction hash has already been used for another payment',
   }
   return messages[status] || 'Transaction verification failed'
+}
+
+const isOverpaidEthAmount = (receivedEthAmount, expectedEthAmount) => {
+  try {
+    return BigInt(toWeiString(receivedEthAmount)) > BigInt(toWeiString(expectedEthAmount))
+  } catch {
+    return false
+  }
 }
 
 const parsePaymentInstructions = (value) => {
@@ -550,6 +589,18 @@ export async function submitSepoliaTransactionHash(paymentId, txHash) {
        WHERE payment_id = ? AND status NOT IN ('SETTLED', 'PAID_OUT')`,
       [paymentId]
     )
+    await pool.query(
+      `INSERT INTO audit_logs (payment_id, merchant_id, actor_type, action, details, created_at)
+       VALUES (?, ?, 'SYSTEM', 'PAYMENT_EXPIRED', ?, CURRENT_TIMESTAMP)`,
+      [
+        paymentId,
+        payment.merchant_id,
+        JSON.stringify({
+          txHash: String(txHash || '').trim() || null,
+          reason: 'Payment or locked quote expired before transaction verification',
+        }),
+      ]
+    )
     return {
       status: 'EXPIRED',
       error: buildVerificationErrorMessage('EXPIRED'),
@@ -635,7 +686,7 @@ export async function submitSepoliaTransactionHash(paymentId, txHash) {
       await insertAuditLog(conn, {
         paymentId,
         merchantId: lockedPayment.merchant_id,
-        action: 'PAYMENT_TX_VERIFICATION_EXPIRED',
+        action: 'PAYMENT_EXPIRED',
         details: { txHash: normalizedTxHash },
       })
       await conn.commit()
@@ -675,6 +726,20 @@ export async function submitSepoliaTransactionHash(paymentId, txHash) {
         status: txStatus,
       })
 
+      if (blockchainTransactionId) {
+        await insertAuditLog(conn, {
+          paymentId,
+          merchantId: lockedPayment.merchant_id,
+          blockchainTransactionId,
+          action: 'PAYMENT_TX_DETECTED',
+          details: {
+            txHash: normalizedTxHash,
+            verificationStatus: verification.status,
+            amountEth: verification.amountEth || null,
+          },
+        })
+      }
+
       if (verification.status === 'PENDING_CONFIRMATION') {
         await conn.query(
           `UPDATE payments
@@ -693,6 +758,18 @@ export async function submitSepoliaTransactionHash(paymentId, txHash) {
            WHERE payment_id = ?`,
           [verification.amountEth || '0', paymentId]
         )
+        await insertAuditLog(conn, {
+          paymentId,
+          merchantId: lockedPayment.merchant_id,
+          blockchainTransactionId,
+          action: 'PAYMENT_UNDERPAID',
+          details: {
+            txHash: normalizedTxHash,
+            receivedEthAmount: verification.amountEth || null,
+            expectedEthAmount: lockedPayment.expected_crypto_amount,
+            requiredMinimumEth: verification.requiredMinimumEth || null,
+          },
+        })
       }
 
       await insertAuditLog(conn, {
@@ -721,6 +798,33 @@ export async function submitSepoliaTransactionHash(paymentId, txHash) {
       verification,
       status: 'CONFIRMED',
     })
+
+    await insertAuditLog(conn, {
+      paymentId,
+      merchantId: lockedPayment.merchant_id,
+      blockchainTransactionId,
+      action: 'PAYMENT_TX_DETECTED',
+      details: {
+        txHash: normalizedTxHash,
+        confirmations: verification.confirmations,
+        amountEth: verification.amountEth,
+      },
+    })
+
+    const overpaid = isOverpaidEthAmount(verification.amountEth, lockedPayment.expected_crypto_amount)
+    if (overpaid) {
+      await insertAuditLog(conn, {
+        paymentId,
+        merchantId: lockedPayment.merchant_id,
+        blockchainTransactionId,
+        action: 'PAYMENT_OVERPAID',
+        details: {
+          txHash: normalizedTxHash,
+          receivedEthAmount: verification.amountEth,
+          expectedEthAmount: lockedPayment.expected_crypto_amount,
+        },
+      })
+    }
 
     await conn.query(
       `UPDATE payments

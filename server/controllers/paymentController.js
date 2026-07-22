@@ -10,9 +10,7 @@ export async function createPaymentRequest(req, res) {
   try {
     const {
       amountSgd,
-      merchantOrderReference,
       description,
-      customerReference,
       supportedAssetId,
       assetId,
     } = req.body
@@ -25,9 +23,7 @@ export async function createPaymentRequest(req, res) {
     const payment = await createPayment({
       merchantId: req.merchantId,
       amountSgd: parsedAmount,
-      merchantOrderReference,
       description,
-      customerReference,
     })
 
     const selectedAssetId = supportedAssetId || assetId

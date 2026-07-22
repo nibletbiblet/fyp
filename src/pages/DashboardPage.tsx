@@ -1,6 +1,17 @@
 import { useState, useEffect, useRef } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
+import { parseEther } from 'ethers'
 import logoIcon from '../assets/logo-icon.png'
+
+interface EthereumProvider {
+  request(args: { method: string; params?: unknown[] }): Promise<unknown>
+}
+
+declare global {
+  interface Window {
+    ethereum?: EthereumProvider
+  }
+}
 
 interface MerchantProfile {
   merchant_id: string
@@ -58,7 +69,12 @@ interface ToastNotification {
 interface PaymentInstructions {
   qrCodeImageDataUrl?: string
   qrCodeData?: string
+  walletPaymentQrCodeData?: string
+  eip681PaymentUri?: string | null
   checkoutUrl?: string
+  supportedAssetId?: string
+  cryptoSymbol?: string
+  network?: string
   receivingAddress?: string
   expectedCryptoAmount?: string
   quoteExpiresAt?: string
@@ -67,7 +83,9 @@ interface PaymentInstructions {
 interface CreatedPaymentDetails {
   payment_id: string
   payment_reference: string
+  merchant_order_reference: string | null
   amount_sgd: string | number
+  supported_asset_id?: string | null
   expected_crypto_amount: string | number | null
   received_crypto_amount?: string | number | null
   receiving_address: string | null
@@ -88,6 +106,9 @@ interface DetectedTransaction {
 }
 
 const DEFAULT_PAYMENT_ASSET_ID = 'asset-eth-sepolia'
+const SEPOLIA_CHAIN_ID_HEX = '0xaa36a7'
+const SEPOLIA_RPC_URL = 'https://ethereum-sepolia-rpc.publicnode.com'
+const TERMINAL_PAYMENT_STATUSES = new Set(['SETTLED', 'PAID_OUT', 'EXPIRED', 'FAILED'])
 
 function parsePaymentInstructions(value: CreatedPaymentDetails['payment_instructions']): PaymentInstructions {
   if (!value) return {}
@@ -132,9 +153,7 @@ export default function DashboardPage() {
   // Modal State
   const [modalOpen, setModalOpen] = useState(false)
   const [amountSgd, setAmountSgd] = useState('')
-  const [merchantOrderReference, setMerchantOrderReference] = useState('')
   const [description, setDescription] = useState('')
-  const [customerReference, setCustomerReference] = useState('')
   const [modalLoading, setModalLoading] = useState(false)
   const [modalError, setModalError] = useState('')
   const [createdLink, setCreatedLink] = useState('')
@@ -144,6 +163,9 @@ export default function DashboardPage() {
   const [detectedTransaction, setDetectedTransaction] = useState<DetectedTransaction | null>(null)
   const [manualTxHash, setManualTxHash] = useState('')
   const [manualVerifyLoading, setManualVerifyLoading] = useState(false)
+  const [metamaskLoading, setMetamaskLoading] = useState(false)
+  const [metamaskMessage, setMetamaskMessage] = useState('')
+  const [metamaskError, setMetamaskError] = useState('')
 
   // Toast helper
   const addToast = (message: string, amount?: string, type: 'success' | 'info' = 'success') => {
@@ -301,6 +323,8 @@ export default function DashboardPage() {
     setDetectionMessage('')
     setDetectedTransaction(null)
     setManualTxHash('')
+    setMetamaskMessage('')
+    setMetamaskError('')
 
     try {
       const res = await fetch('/api/payments', {
@@ -312,9 +336,7 @@ export default function DashboardPage() {
         body: JSON.stringify({
           amountSgd: Number(amountSgd),
           supportedAssetId: DEFAULT_PAYMENT_ASSET_ID,
-          merchantOrderReference,
           description,
-          customerReference,
         })
       })
       const data = await res.json()
@@ -328,9 +350,7 @@ export default function DashboardPage() {
         setCreatedLink(window.location.origin + checkoutPath)
         setDetectionMessage('Waiting for Sepolia payment...')
         setAmountSgd('')
-        setMerchantOrderReference('')
         setDescription('')
-        setCustomerReference('')
         // Refresh payments list immediately
         fetchDashboardData()
       }
@@ -418,6 +438,145 @@ export default function DashboardPage() {
     }
   }
 
+  const getWalletErrorMessage = (err: unknown, fallback: string) => {
+    const code = typeof err === 'object' && err !== null && 'code' in err
+      ? Number((err as { code?: number | string }).code)
+      : null
+
+    if (code === 4001) return fallback
+    if (code === 4902) return 'Ethereum Sepolia is not available in this wallet.'
+    return fallback
+  }
+
+  const requestSepoliaNetwork = async (ethereum: EthereumProvider) => {
+    const chainId = await ethereum.request({ method: 'eth_chainId' })
+    if (String(chainId).toLowerCase() === SEPOLIA_CHAIN_ID_HEX) return
+
+    try {
+      await ethereum.request({
+        method: 'wallet_switchEthereumChain',
+        params: [{ chainId: SEPOLIA_CHAIN_ID_HEX }],
+      })
+    } catch (switchErr) {
+      const code = typeof switchErr === 'object' && switchErr !== null && 'code' in switchErr
+        ? Number((switchErr as { code?: number | string }).code)
+        : null
+
+      if (code !== 4902) {
+        throw Object.assign(new Error('Wrong network or network switch rejected.'), { cause: switchErr })
+      }
+
+      await ethereum.request({
+        method: 'wallet_addEthereumChain',
+        params: [{
+          chainId: SEPOLIA_CHAIN_ID_HEX,
+          chainName: 'Ethereum Sepolia',
+          nativeCurrency: { name: 'Sepolia ETH', symbol: 'ETH', decimals: 18 },
+          rpcUrls: [SEPOLIA_RPC_URL],
+          blockExplorerUrls: ['https://sepolia.etherscan.io'],
+        }],
+      })
+    }
+  }
+
+  const handlePayWithMetaMask = async () => {
+    if (!createdPayment?.payment_id || !createdPayment.receiving_address || !createdPayment.expected_crypto_amount) {
+      setMetamaskError('Payment details are not ready yet.')
+      return
+    }
+
+    const ethereum = window.ethereum
+    if (!ethereum) {
+      setMetamaskError('MetaMask not installed. Install MetaMask or use the QR/manual payment fallback.')
+      return
+    }
+
+    setMetamaskLoading(true)
+    setMetamaskError('')
+    setMetamaskMessage('Connecting MetaMask...')
+
+    try {
+      let accounts: string[]
+      try {
+        accounts = await ethereum.request({ method: 'eth_requestAccounts' }) as string[]
+      } catch (connectErr) {
+        setMetamaskError(getWalletErrorMessage(connectErr, 'Wallet connection rejected.'))
+        return
+      }
+
+      const from = accounts?.[0]
+      if (!from) {
+        setMetamaskError('Wallet connection rejected.')
+        return
+      }
+
+      setMetamaskMessage('Checking Ethereum Sepolia network...')
+      try {
+        await requestSepoliaNetwork(ethereum)
+      } catch (networkErr) {
+        setMetamaskError(getWalletErrorMessage(networkErr, 'Wrong network or network switch rejected.'))
+        return
+      }
+
+      const valueWei = parseEther(String(createdPayment.expected_crypto_amount))
+      const valueHex = `0x${valueWei.toString(16)}`
+
+      setMetamaskMessage('Confirm the exact Sepolia ETH payment in MetaMask.')
+      let txHash: string
+      try {
+        txHash = await ethereum.request({
+          method: 'eth_sendTransaction',
+          params: [{
+            from,
+            to: createdPayment.receiving_address,
+            value: valueHex,
+          }],
+        }) as string
+      } catch (txErr) {
+        setMetamaskError(getWalletErrorMessage(txErr, 'Transaction rejected.'))
+        return
+      }
+
+      setManualTxHash(txHash)
+      setDetectedTransaction({ txHash })
+      setMetamaskMessage('Transaction submitted. Waiting for confirmation...')
+      setDetectionMessage('Transaction submitted. Waiting for confirmation...')
+
+      try {
+        const res = await fetch(`/api/payments/${createdPayment.payment_id}/submit-tx`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ txHash }),
+        })
+        const data = await res.json()
+
+        if (res.ok && data.status === 'CONFIRMED') {
+          setDetectionMessage('Payment confirmed. Simulated SGD settlement completed.')
+          setMetamaskMessage('Payment confirmed. Simulated SGD settlement completed.')
+          setDetectedTransaction({
+            txHash: data.txHash,
+            amountEth: data.amountEth,
+            confirmations: data.confirmations,
+          })
+          fetchDashboardData()
+        } else if (data.status === 'PENDING_CONFIRMATION') {
+          setDetectionMessage('Transaction submitted. Waiting for confirmation...')
+        } else if (data.status === 'UNDERPAID') {
+          setDetectionMessage(data.error || 'Transaction was underpaid.')
+          setMetamaskError(data.error || 'Transaction was underpaid.')
+        } else if (!res.ok) {
+          setMetamaskError(data.error || 'Backend verification is temporarily unavailable. Auto-detection will keep polling.')
+        }
+      } catch {
+        setMetamaskError('Transaction submitted, but backend verification is temporarily unavailable. Auto-detection will keep polling.')
+      }
+    } catch (err) {
+      setMetamaskError(getWalletErrorMessage(err, 'Transaction rejected or failed in MetaMask.'))
+    } finally {
+      setMetamaskLoading(false)
+    }
+  }
+
   const getInitials = (name: string) => {
     return name
       .split(' ')
@@ -472,12 +631,31 @@ export default function DashboardPage() {
   const isOnboarded = merchant?.status === 'ACTIVE_ONBOARDED'
   const successRate = stats.totalCount > 0 ? Math.round((stats.settledCount / stats.totalCount) * 100) : 0
   const createdInstructions = createdPayment ? parsePaymentInstructions(createdPayment.payment_instructions) : {}
+  const createdQrPayload = createdInstructions.eip681PaymentUri
+    || createdInstructions.walletPaymentQrCodeData
+    || createdInstructions.qrCodeData
+    || ''
   const createdExpectedAmount = createdPayment?.expected_crypto_amount
     ? Number(createdPayment.expected_crypto_amount).toFixed(6)
     : ''
   const createdRate = createdPayment?.quoted_rate_sgd_per_crypto
     ? Number(createdPayment.quoted_rate_sgd_per_crypto).toFixed(2)
     : ''
+  const createdNetwork = String(createdPayment?.network_snapshot || createdInstructions.network || '').toUpperCase()
+  const createdCrypto = String(createdPayment?.crypto_symbol_snapshot || createdInstructions.cryptoSymbol || '').toUpperCase()
+  const qrPayloadUpper = String(createdQrPayload || '').toUpperCase()
+  const isSepoliaEthPayment = (
+    createdNetwork.includes('SEPOLIA')
+    || createdCrypto === 'ETH'
+    || qrPayloadUpper.includes('@11155111')
+  )
+  const canPayWithMetaMask = Boolean(
+    createdPayment?.payment_id
+    && createdPayment?.receiving_address
+    && createdPayment?.expected_crypto_amount
+    && isSepoliaEthPayment
+    && !TERMINAL_PAYMENT_STATUSES.has(createdPayment.status || '')
+  )
 
   return (
     <div className="dashboard-layout">
@@ -977,10 +1155,10 @@ export default function DashboardPage() {
                 setDetectionMessage('')
                 setDetectedTransaction(null)
                 setManualTxHash('')
+                setMetamaskMessage('')
+                setMetamaskError('')
                 setAmountSgd('')
-                setMerchantOrderReference('')
                 setDescription('')
-                setCustomerReference('')
               }}
               style={{
                 position: 'absolute',
@@ -1030,32 +1208,12 @@ export default function DashboardPage() {
                   </select>
                 </div>
                 <div className="form-group">
-                  <label className="form-label">Order Reference</label>
-                  <input
-                    type="text"
-                    placeholder="e.g. INV-2035"
-                    value={merchantOrderReference}
-                    onChange={(e) => setMerchantOrderReference(e.target.value)}
-                    className="form-input"
-                  />
-                </div>
-                <div className="form-group">
                   <label className="form-label">Description</label>
                   <input
                     type="text"
                     placeholder="e.g. Website design deposit"
                     value={description}
                     onChange={(e) => setDescription(e.target.value)}
-                    className="form-input"
-                  />
-                </div>
-                <div className="form-group">
-                  <label className="form-label">Customer Reference</label>
-                  <input
-                    type="text"
-                    placeholder="e.g. CUST-1001"
-                    value={customerReference}
-                    onChange={(e) => setCustomerReference(e.target.value)}
                     className="form-input"
                   />
                 </div>
@@ -1084,21 +1242,83 @@ export default function DashboardPage() {
                   ✓ Payment Link Generated Successfully!
                 </div>
 
+                {canPayWithMetaMask && (
+                  <div style={{ marginBottom: 18 }}>
+                    <button
+                      type="button"
+                      className="btn-onboarding-primary"
+                      disabled={metamaskLoading}
+                      onClick={handlePayWithMetaMask}
+                      style={{ width: '100%', justifyContent: 'center', padding: '14px 18px', fontSize: 14 }}
+                    >
+                      {metamaskLoading ? 'Opening MetaMask...' : 'Pay with MetaMask'}
+                    </button>
+                    {(metamaskMessage || metamaskError) && (
+                      <div
+                        style={{
+                          marginTop: 10,
+                          padding: 10,
+                          borderRadius: 8,
+                          border: metamaskError ? '1px solid rgba(239,68,68,0.55)' : '1px solid rgba(240,165,0,0.35)',
+                          color: metamaskError ? '#ef4444' : '#f0a500',
+                          background: metamaskError ? 'rgba(239,68,68,0.06)' : 'rgba(240,165,0,0.06)',
+                          fontSize: 12,
+                          lineHeight: 1.5,
+                        }}
+                      >
+                        {metamaskError || metamaskMessage}
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 {createdInstructions.qrCodeImageDataUrl && (
                   <div style={{ textAlign: 'center', marginBottom: 20 }}>
                     <img
                       src={createdInstructions.qrCodeImageDataUrl}
-                      alt="Checkout QR code"
+                      alt="Sepolia ETH payment QR code"
                       style={{ width: 220, height: 220, background: '#fff', borderRadius: 10, padding: 8 }}
                     />
                     <div style={{ marginTop: 8, fontSize: 11, color: 'rgba(255,255,255,0.4)' }}>
                       Scan with MetaMask on Ethereum Sepolia.
                     </div>
+                    {createdQrPayload && (
+                      <div style={{ marginTop: 10, textAlign: 'left' }}>
+                        <div className="infra-card-label">QR URI</div>
+                        <div style={{
+                          display: 'flex',
+                          gap: 8,
+                          alignItems: 'center',
+                          background: 'rgba(255,255,255,0.03)',
+                          border: '1px solid rgba(255,255,255,0.08)',
+                          borderRadius: 8,
+                          padding: 8,
+                        }}>
+                          <code style={{ flex: 1, color: 'rgba(255,255,255,0.72)', wordBreak: 'break-all', fontSize: 10 }}>
+                            {createdQrPayload}
+                          </code>
+                          <button
+                            type="button"
+                            className="btn-onboarding-back"
+                            style={{ padding: '6px 10px', fontSize: 11 }}
+                            onClick={() => navigator.clipboard.writeText(createdQrPayload)}
+                          >
+                            Copy
+                          </button>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
 
                 {createdPayment && (
                   <div style={{ display: 'grid', gap: 10, marginBottom: 18 }}>
+                    <div className="infra-card">
+                      <div className="infra-card-label">Order Reference</div>
+                      <div className="infra-card-value" style={{ color: '#f0a500', fontFamily: 'Space Mono, monospace' }}>
+                        {createdPayment.merchant_order_reference || 'N/A'}
+                      </div>
+                    </div>
                     <div className="infra-card">
                       <div className="infra-card-label">SGD Amount</div>
                       <div className="infra-card-value">S$ {Number(createdPayment.amount_sgd).toFixed(2)}</div>
@@ -1153,6 +1373,9 @@ export default function DashboardPage() {
                           Copy Amount
                         </button>
                       </div>
+                    </div>
+                    <div style={{ color: 'rgba(255,255,255,0.4)', fontSize: 11, fontFamily: 'Space Mono, monospace', wordBreak: 'break-all' }}>
+                      Debug: network_snapshot={String(createdPayment.network_snapshot || 'null')}; crypto_symbol_snapshot={String(createdPayment.crypto_symbol_snapshot || 'null')}; status={String(createdPayment.status || 'null')}
                     </div>
                   </div>
                 )}
@@ -1271,10 +1494,10 @@ export default function DashboardPage() {
                       setDetectionMessage('')
                       setDetectedTransaction(null)
                       setManualTxHash('')
+                      setMetamaskMessage('')
+                      setMetamaskError('')
                       setAmountSgd('')
-                      setMerchantOrderReference('')
                       setDescription('')
-                      setCustomerReference('')
                     }}
                     className="btn-onboarding-back"
                     style={{ flex: 1 }}

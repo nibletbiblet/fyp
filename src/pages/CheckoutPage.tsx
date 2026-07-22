@@ -18,6 +18,8 @@ interface SupportedAsset {
 interface PaymentInstructions {
   qrCodeImageDataUrl?: string
   qrCodeData?: string
+  walletPaymentQrCodeData?: string
+  eip681PaymentUri?: string | null
   receivingAddress?: string
   expectedCryptoAmount?: string
   quoteExpiresAt?: string
@@ -269,6 +271,11 @@ export default function CheckoutPage() {
 
   const { payment, supportedAssets } = checkout
   const instructions = parseInstructions(payment.payment_instructions)
+  const qrPayload = instructions.eip681PaymentUri
+    || instructions.walletPaymentQrCodeData
+    || payment.qr_code_data
+    || instructions.qrCodeData
+    || ''
   const selectedAsset = supportedAssets.find((asset) => asset.supported_asset_id === payment.supported_asset_id)
   const hasPaymentInstructions = Boolean(payment.supported_asset_id && payment.receiving_address)
   const canSubmitSepoliaTx = payment.network_snapshot === 'ETH_SEPOLIA' && ['AWAITING_PAYMENT', 'CONFIRMING', 'UNDERPAID'].includes(payment.status)
@@ -389,6 +396,16 @@ export default function CheckoutPage() {
                 <p style={{ fontSize: 11, color: 'rgba(255,255,255,0.4)', marginTop: 10 }}>
                   Scan with MetaMask on Ethereum Sepolia.
                 </p>
+                {qrPayload && (
+                  <button
+                    type="button"
+                    className="btn-onboarding-back"
+                    style={{ marginTop: 8, padding: '6px 10px', fontSize: 11 }}
+                    onClick={() => navigator.clipboard.writeText(qrPayload)}
+                  >
+                    Copy QR URI
+                  </button>
+                )}
               </div>
 
               <div>
@@ -538,7 +555,7 @@ export default function CheckoutPage() {
               <div className="infra-card-label">QR Payload</div>
               <textarea
                 readOnly
-                value={payment.qr_code_data || instructions.qrCodeData || ''}
+                value={qrPayload}
                 className="form-input"
                 style={{ minHeight: 96, fontFamily: 'Space Mono, monospace', fontSize: 11 }}
               />

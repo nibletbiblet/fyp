@@ -190,7 +190,7 @@ export async function scanSepoliaEthPayment({
       if (ignored.has(String(txHash).toLowerCase())) continue
 
       const tx = await provider.getTransaction(txHash)
-      if (!tx || !tx.to || normalizeAddress(tx.to) !== expectedRecipient || tx.value < minimumWei) {
+      if (!tx || !tx.to || normalizeAddress(tx.to) !== expectedRecipient) {
         continue
       }
 
@@ -212,6 +212,8 @@ export async function scanSepoliaEthPayment({
         amountEth: formatEther(tx.value),
         confirmations,
         blockNumber: receipt.blockNumber,
+        isUnderpaid: tx.value < minimumWei,
+        requiredMinimumEth: formatEther(minimumWei),
         scannedFromBlock: boundedFromBlock,
         scannedToBlock: scanToBlock,
       }
