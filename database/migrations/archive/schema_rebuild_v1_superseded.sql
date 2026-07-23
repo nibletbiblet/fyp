@@ -1,3 +1,7 @@
+-- ARCHIVED / SUPERSEDED: do not apply.
+-- This was an intermediate rebuild candidate. The approved and current
+-- fresh-database baseline is database/schema.sql.
+
 -- Clean schema rebuild v1 for the crypto payment platform MVP.
 -- This file is a replacement-candidate schema, not an incremental migration.
 -- It intentionally does not keep the old transactions, ledger_entries, or

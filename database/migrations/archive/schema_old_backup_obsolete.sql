@@ -1,3 +1,7 @@
+-- ARCHIVED / OBSOLETE BACKUP: do not apply.
+-- This dump is the pre-rebuild schema with transactions, ledger_entries, and
+-- payout_records. The approved fresh-database baseline is database/schema.sql.
+
 -- MySQL dump 10.13  Distrib 8.0.42, for Win64 (x86_64)
 --
 -- Host: dft-fyp.mysql.database.azure.com    Database: soi-2026-2610-0017-yucheng

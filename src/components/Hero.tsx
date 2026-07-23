@@ -140,7 +140,10 @@ export default function Hero() {
           {/* CTAs */}
           <FadeUp delay={0.5} className="flex items-center gap-4 lg:col-span-1 lg:justify-center">
             <Link to="/register" id="hero-cta-primary" className="btn-primary">
-              Register / Login <ArrowRight size={14} />
+              Register <ArrowRight size={14} />
+            </Link>
+            <Link to="/login" id="hero-cta-login" className="btn-ghost">
+              Login
             </Link>
             <a href="#protocol" id="hero-cta-secondary" className="btn-ghost">
               Read Docs <ExternalLink size={12} />

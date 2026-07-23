@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Admin Identity Review Dashboard</title>
+    <link rel="stylesheet" href="/identity-review.css" />
+  </head>
+  <body class="kyc-console-page">
+    <main class="app-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="mark">CF</div>
+          <div>
+            <h1>ChainForge</h1>
+            <p>Admin Identity Review Dashboard</p>
+          </div>
+        </div>
+
+        <section class="panel">
+          <div class="panel-header"><h2>Pending</h2></div>
+          <div id="pendingList" class="identity-list"></div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-header"><h2>Completed</h2></div>
+          <div id="completedList" class="identity-list"></div>
+        </section>
+      </aside>
+
+      <section class="workspace">
+        <header class="topbar">
+          <div>
+            <span class="eyebrow">Admin Operations</span>
+            <h2>Admin Identity Review Dashboard</h2>
+            <p id="statusText">Loading identity review cases...</p>
+          </div>
+          <div class="topbar-actions">
+            <a class="button-link" href="/dashboard">Main Dashboard</a>
+            <button id="refreshBtn" type="button">Refresh</button>
+          </div>
+        </header>
+
+        <section class="content-grid">
+          <div class="panel customer-panel">
+            <div class="panel-header">
+              <h2>Review Queue</h2>
+              <input id="caseFilter" placeholder="Filter by email or payment reference" />
+            </div>
+            <div id="caseList" class="customer-list"></div>
+          </div>
+
+          <div class="panel detail-panel">
+            <div class="panel-header">
+              <h2>Selected Case</h2>
+              <span id="selectedBadge" class="badge muted">None</span>
+            </div>
+            <div id="caseDetail" class="detail-empty">Select an identity review case.</div>
+          </div>
+
+          <div class="panel actions-panel">
+            <div class="panel-header"><h2>Review Decision</h2></div>
+            <div id="reviewSummary" class="result-box">Select an identity review case.</div>
+            <label class="review-note-label">
+              Rejection reason
+              <textarea id="reviewReason" placeholder="Required when rejecting a POI"></textarea>
+            </label>
+            <div class="inline-form two review-decision-buttons">
+              <button id="rejectBtn" class="danger-button" type="button">Reject POI</button>
+              <button id="approveBtn" type="button">Approve POI</button>
+            </div>
+          </div>
+
+          <div class="panel webhook-panel">
+            <div class="panel-header"><h2>Document Preview</h2></div>
+            <div id="poiPreviewBox" class="result-box">No POI selected.</div>
+          </div>
+        </section>
+      </section>
+    </main>
+
+    <script src="/identity-review.js"></script>
+  </body>
+</html>

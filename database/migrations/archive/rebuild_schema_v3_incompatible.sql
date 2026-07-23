@@ -1,5 +1,8 @@
--- Rebuild schema matching the new merchants + merchant_users design.
--- Updates all foreign key references from varchar(36) to int.
+-- ARCHIVED / INCOMPATIBLE / DESTRUCTIVE: do not apply.
+-- This rebuild targets an abandoned onboarding design with integer merchants.id,
+-- merchant_users, and DROP TABLE statements. The approved baseline is
+-- database/schema.sql, which uses merchants.merchant_id UUIDs and one merchant
+-- auth record with merchants.password_hash.
 
 SET NAMES utf8mb4;
 SET FOREIGN_KEY_CHECKS = 0;
