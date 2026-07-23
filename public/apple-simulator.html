@@ -1,0 +1,1158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Apple Sign-In Simulator & OIDC Debugger</title>
+  <!-- Modern Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  
+  <style>
+    :root {
+      --bg-gradient: radial-gradient(circle at top left, #0c0d12 0%, #06070a 100%);
+      --card-bg: rgba(20, 22, 33, 0.85);
+      --card-border: rgba(255, 255, 255, 0.08);
+      --card-border-hover: rgba(0, 102, 204, 0.4);
+      --text-main: #f3f4f6;
+      --text-muted: #9ca3af;
+      
+      --apple-black: #000000;
+      --apple-white: #ffffff;
+      --apple-gray: #f5f5f7;
+      --apple-blue: #0071e3;
+      --apple-blue-hover: #0077ed;
+      --apple-border: #d2d2d7;
+      
+      --syntax-key: #f472b6;
+      --syntax-val: #34d399;
+      --syntax-num: #fbbf24;
+      --syntax-bool: #60a5fa;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg-gradient);
+      color: var(--text-main);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 2rem 1.5rem;
+      overflow-x: hidden;
+    }
+
+    /* Background glow decorations */
+    .glow-orb {
+      position: absolute;
+      width: 600px;
+      height: 600px;
+      background: radial-gradient(circle, rgba(0, 102, 204, 0.15) 0%, rgba(0,0,0,0) 70%);
+      top: -100px;
+      z-index: -1;
+      pointer-events: none;
+      filter: blur(40px);
+    }
+
+    header {
+      text-align: center;
+      margin-bottom: 2.5rem;
+      max-width: 700px;
+    }
+
+    header h1 {
+      font-size: 2.5rem;
+      font-weight: 700;
+      letter-spacing: -0.03em;
+      margin-bottom: 0.75rem;
+      background: linear-gradient(135deg, #ffffff 40%, #a5b4fc 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    header p {
+      font-size: 1.05rem;
+      color: var(--text-muted);
+      line-height: 1.6;
+    }
+
+    .container {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 2rem;
+      width: 100%;
+      max-width: 1200px;
+      z-index: 1;
+    }
+
+    @media (min-width: 900px) {
+      .container {
+        grid-template-columns: 420px 1fr;
+      }
+    }
+
+    /* Sleek Cards */
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 20px;
+      padding: 2rem;
+      backdrop-filter: blur(20px);
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    .card:hover {
+      border-color: rgba(255, 255, 255, 0.15);
+      box-shadow: 0 15px 35px rgba(0, 0, 0, 0.4);
+    }
+
+    .card h2 {
+      font-size: 1.25rem;
+      font-weight: 600;
+      margin-bottom: 1.5rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+      padding-bottom: 0.75rem;
+    }
+
+    /* Configuration Panel Form elements */
+    .form-group {
+      margin-bottom: 1.25rem;
+    }
+
+    .form-group label {
+      display: block;
+      font-size: 0.85rem;
+      font-weight: 500;
+      color: var(--text-muted);
+      margin-bottom: 0.5rem;
+    }
+
+    .form-group input, .form-group select {
+      width: 100%;
+      background: rgba(10, 11, 18, 0.6);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 10px;
+      padding: 0.75rem 1rem;
+      color: #fff;
+      font-family: inherit;
+      font-size: 0.95rem;
+      transition: all 0.2s;
+    }
+
+    .form-group input:focus, .form-group select:focus {
+      outline: none;
+      border-color: var(--apple-blue);
+      box-shadow: 0 0 0 3px rgba(0, 102, 204, 0.2);
+    }
+
+    /* Apple Button Simulator Area */
+    .simulator-workspace {
+      display: flex;
+      flex-direction: column;
+      gap: 1.5rem;
+      align-items: center;
+      justify-content: center;
+      min-height: 200px;
+      border: 1px dashed rgba(255, 255, 255, 0.1);
+      border-radius: 16px;
+      background: rgba(0,0,0,0.15);
+      padding: 2.5rem;
+      text-align: center;
+    }
+
+    .workspace-instructions {
+      color: var(--text-muted);
+      font-size: 0.9rem;
+      margin-bottom: 1rem;
+      max-width: 320px;
+    }
+
+    /* Official Apple Branding Button styling */
+    .apple-signin-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      background-color: var(--apple-black);
+      color: var(--apple-white);
+      border: none;
+      border-radius: 8px;
+      padding: 0 1.25rem;
+      height: 48px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      font-size: 19px;
+      font-weight: 500;
+      letter-spacing: -0.45px;
+      cursor: pointer;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.25);
+      transition: transform 0.1s ease, background-color 0.2s, box-shadow 0.2s;
+      width: 100%;
+      max-width: 300px;
+      user-select: none;
+    }
+
+    .apple-signin-btn:hover {
+      background-color: #1a1a1a;
+      box-shadow: 0 6px 16px rgba(0, 0, 0, 0.35);
+    }
+
+    .apple-signin-btn:active {
+      transform: scale(0.98);
+    }
+
+    .apple-logo-icon {
+      width: 17px;
+      height: 17px;
+      margin-right: 8px;
+      fill: currentColor;
+      margin-top: -3px;
+    }
+
+    /* Clean Overlay / Apple Modal */
+    .modal-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0, 0, 0, 0.7);
+      backdrop-filter: blur(8px);
+      z-index: 100;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    .modal-overlay.active {
+      opacity: 1;
+      pointer-events: auto;
+    }
+
+    /* Realistic Apple Dialog box */
+    .apple-modal {
+      width: 100%;
+      max-width: 520px;
+      background: var(--apple-white);
+      color: #1d1d1f;
+      border-radius: 18px;
+      box-shadow: 0 20px 50px rgba(0,0,0,0.5);
+      overflow: hidden;
+      transform: scale(0.9) translateY(20px);
+      transition: transform 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+
+    .modal-overlay.active .apple-modal {
+      transform: scale(1) translateY(0);
+    }
+
+    .apple-modal-header {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 2rem 2rem 1.5rem 2rem;
+      border-bottom: 1px solid var(--apple-border);
+      text-align: center;
+      position: relative;
+    }
+
+    .apple-modal-header .close-btn {
+      position: absolute;
+      top: 1.25rem;
+      right: 1.25rem;
+      background: #eaeaea;
+      color: #86868b;
+      border: none;
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 700;
+    }
+
+    .apple-modal-header .close-btn:hover {
+      background: #dcdcdc;
+      color: #1d1d1f;
+    }
+
+    .apple-id-badge {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 48px;
+      height: 48px;
+      background: #000;
+      color: #fff;
+      border-radius: 12px;
+      margin-bottom: 1rem;
+    }
+
+    .apple-id-badge svg {
+      width: 24px;
+      height: 24px;
+      fill: currentColor;
+    }
+
+    .apple-modal-header h3 {
+      font-size: 1.4rem;
+      font-weight: 600;
+      color: #1d1d1f;
+      letter-spacing: -0.01em;
+    }
+
+    .apple-modal-header p {
+      font-size: 0.95rem;
+      color: #86868b;
+      margin-top: 0.25rem;
+    }
+
+    .apple-modal-body {
+      padding: 2rem;
+      background: var(--apple-gray);
+    }
+
+    .app-request-info {
+      background: var(--apple-white);
+      border: 1px solid var(--apple-border);
+      border-radius: 12px;
+      padding: 1.25rem;
+      margin-bottom: 1.5rem;
+    }
+
+    .app-request-row {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 0.75rem;
+      font-size: 0.9rem;
+    }
+
+    .app-request-row:last-child {
+      margin-bottom: 0;
+    }
+
+    .app-request-label {
+      color: #86868b;
+      font-weight: 500;
+    }
+
+    .app-request-value {
+      color: #1d1d1f;
+      font-weight: 600;
+      text-align: right;
+    }
+
+    /* Radio selections for Sharing options */
+    .sharing-options {
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+      margin-bottom: 1.5rem;
+    }
+
+    .share-option-card {
+      background: var(--apple-white);
+      border: 1px solid var(--apple-border);
+      border-radius: 12px;
+      padding: 1.25rem;
+      display: flex;
+      align-items: flex-start;
+      gap: 1rem;
+      cursor: pointer;
+      position: relative;
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+
+    .share-option-card:hover {
+      border-color: #a2a2a7;
+    }
+
+    .share-option-card.selected {
+      border-color: var(--apple-blue);
+      box-shadow: 0 0 0 1px var(--apple-blue);
+    }
+
+    .share-option-card input[type="radio"] {
+      position: absolute;
+      top: 1.35rem;
+      left: 1.25rem;
+      accent-color: var(--apple-blue);
+      width: 18px;
+      height: 18px;
+      cursor: pointer;
+    }
+
+    .share-option-details {
+      padding-left: 2rem;
+    }
+
+    .share-option-title {
+      font-size: 0.95rem;
+      font-weight: 600;
+      color: #1d1d1f;
+      margin-bottom: 0.15rem;
+    }
+
+    .share-option-desc {
+      font-size: 0.82rem;
+      color: #86868b;
+      line-height: 1.35;
+    }
+
+    .apple-actions-container {
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+    }
+
+    .apple-btn-primary {
+      background: var(--apple-blue);
+      color: var(--apple-white);
+      border: none;
+      border-radius: 10px;
+      height: 48px;
+      font-size: 1rem;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background-color 0.15s;
+    }
+
+    .apple-btn-primary:hover {
+      background: var(--apple-blue-hover);
+    }
+
+    .apple-btn-secondary {
+      background: none;
+      border: none;
+      color: var(--apple-blue);
+      font-size: 0.95rem;
+      font-weight: 500;
+      cursor: pointer;
+      height: 36px;
+    }
+
+    .apple-btn-secondary:hover {
+      text-decoration: underline;
+    }
+
+    /* Apple Authentication loader */
+    .apple-loading-overlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(255, 255, 255, 0.92);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.25s ease;
+      z-index: 10;
+    }
+
+    .apple-loading-overlay.active {
+      opacity: 1;
+      pointer-events: auto;
+    }
+
+    .spinner {
+      width: 42px;
+      height: 42px;
+      border: 3px solid rgba(0, 102, 204, 0.1);
+      border-radius: 50%;
+      border-top-color: var(--apple-blue);
+      animation: spin 0.8s linear infinite;
+      margin-bottom: 1.25rem;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    .apple-loading-overlay p {
+      font-size: 1.05rem;
+      font-weight: 500;
+      color: #1d1d1f;
+    }
+
+    /* Output Results Workspace */
+    .response-section {
+      display: flex;
+      flex-direction: column;
+      gap: 1.5rem;
+    }
+
+    .tabs-header {
+      display: flex;
+      gap: 0.5rem;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+      padding-bottom: 0.5rem;
+    }
+
+    .tab-btn {
+      background: none;
+      border: none;
+      color: var(--text-muted);
+      font-size: 0.9rem;
+      font-weight: 600;
+      padding: 0.5rem 1rem;
+      cursor: pointer;
+      border-radius: 6px;
+      transition: all 0.2s;
+    }
+
+    .tab-btn.active {
+      background: rgba(0, 102, 204, 0.15);
+      color: #60a5fa;
+    }
+
+    .tab-btn:hover:not(.active) {
+      color: var(--text-main);
+      background: rgba(255, 255, 255, 0.05);
+    }
+
+    .tab-content {
+      display: none;
+    }
+
+    .tab-content.active {
+      display: block;
+    }
+
+    /* Sleek Code block formatting */
+    .code-container {
+      position: relative;
+      border-radius: 12px;
+      background: #07080d;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      overflow: hidden;
+    }
+
+    .code-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: rgba(255,255,255,0.02);
+      border-bottom: 1px solid rgba(255,255,255,0.06);
+      padding: 0.75rem 1.25rem;
+      font-size: 0.8rem;
+      color: var(--text-muted);
+    }
+
+    .copy-btn {
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      color: var(--text-main);
+      padding: 0.35rem 0.75rem;
+      border-radius: 6px;
+      cursor: pointer;
+      font-family: inherit;
+      font-size: 0.75rem;
+      font-weight: 500;
+      transition: all 0.2s;
+      display: flex;
+      align-items: center;
+      gap: 0.25rem;
+    }
+
+    .copy-btn:hover {
+      background: rgba(255, 255, 255, 0.12);
+      border-color: rgba(255, 255, 255, 0.2);
+    }
+
+    .copy-btn:active {
+      transform: scale(0.95);
+    }
+
+    pre {
+      padding: 1.5rem;
+      overflow-x: auto;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.88rem;
+      line-height: 1.5;
+    }
+
+    /* JSON color syntax styles */
+    .json-key { color: var(--syntax-key); }
+    .json-string { color: var(--syntax-val); }
+    .json-number { color: var(--syntax-num); }
+    .json-boolean { color: var(--syntax-bool); }
+    .json-null { color: #9ca3af; }
+
+    /* Alert / Notification box */
+    .toast {
+      position: fixed;
+      bottom: 2rem;
+      right: 2rem;
+      background: #10b981;
+      color: #fff;
+      padding: 0.75rem 1.5rem;
+      border-radius: 10px;
+      font-size: 0.9rem;
+      font-weight: 600;
+      box-shadow: 0 10px 25px rgba(16, 185, 129, 0.3);
+      opacity: 0;
+      transform: translateY(10px);
+      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+      z-index: 200;
+      pointer-events: none;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .toast.show {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    .jwt-segment-header {
+      font-weight: 600;
+      color: #60a5fa;
+      margin-top: 1rem;
+      margin-bottom: 0.25rem;
+      border-bottom: 1px dashed rgba(255,255,255,0.08);
+      padding-bottom: 0.25rem;
+    }
+    
+    .jwt-segment-header:first-child {
+      margin-top: 0;
+    }
+
+    .jwt-display {
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+    }
+
+    .jwt-part {
+      word-break: break-all;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.85rem;
+      padding: 0.5rem;
+      border-radius: 6px;
+    }
+    .jwt-header-part { background: rgba(244, 114, 182, 0.08); border-left: 3px solid var(--syntax-key); }
+    .jwt-payload-part { background: rgba(52, 211, 153, 0.08); border-left: 3px solid var(--syntax-val); }
+    .jwt-signature-part { background: rgba(96, 165, 250, 0.08); border-left: 3px solid var(--syntax-bool); }
+  </style>
+</head>
+<body>
+
+  <div class="glow-orb"></div>
+
+  <header>
+    <h1>Apple Sign-In Simulator</h1>
+    <p>Simulate official Apple Identity responses and OIDC tokens locally for development, sandboxing, and integration diagnostics without a paid Apple Developer subscription.</p>
+  </header>
+
+  <div class="container">
+    <!-- Configuration Column -->
+    <div class="card">
+      <h2>
+        <svg style="width:18px;height:18px;fill:currentColor" viewBox="0 0 24 24"><path d="M12,15.5A3.5,3.5 0 0,1 8.5,12A3.5,3.5 0 0,1 12,8.5A3.5,3.5 0 0,1 15.5,12A3.5,3.5 0 0,1 12,15.5M19.43,12.97C19.47,12.65 19.5,12.33 19.5,12C19.5,11.67 19.47,11.34 19.43,11L21.54,9.37C21.73,9.22 21.78,8.95 21.66,8.73L19.66,5.27C19.54,5.05 19.27,4.96 19.05,5.05L16.56,6.05C16.04,5.66 15.47,5.34 14.88,5.1L14.5,2.42C14.46,2.18 14.25,2 14,2H10C9.75,2 9.54,2.18 9.5,2.42L9.12,5.1C8.53,5.34 7.96,5.66 7.44,6.05L4.95,5.05C4.73,4.96 4.46,5.05 4.34,5.27L2.34,8.73C2.21,8.95 2.27,9.22 2.46,9.37L4.57,11C4.53,11.34 4.5,11.67 4.5,12C4.5,12.33 4.53,12.65 4.57,12.97L2.46,14.63C2.27,14.78 2.21,15.05 2.34,15.27L4.34,18.73C4.46,18.95 4.73,19.03 4.95,18.95L7.44,17.95C7.96,18.34 8.53,18.66 9.12,18.9L9.5,21.58C9.54,21.82 9.75,22 10,22H14C14.25,22 14.46,21.82 14.5,21.58L14.88,18.9C15.47,18.66 16.04,18.34 16.56,17.95L19.05,18.95C19.27,19.03 19.54,18.95 19.66,18.73L21.66,15.27C21.78,15.05 21.73,14.78 21.54,14.63L19.43,12.97Z"/></svg>
+        Configure Mock Identity
+      </h2>
+      
+      <div class="form-group">
+        <label for="input-fname">First Name</label>
+        <input type="text" id="input-fname" value="Alex">
+      </div>
+
+      <div class="form-group">
+        <label for="input-lname">Last Name</label>
+        <input type="text" id="input-lname" value="Tan">
+      </div>
+
+      <div class="form-group">
+        <label for="input-email">Primary Apple ID Email</label>
+        <input type="email" id="input-email" value="alex.tan@gmail.com">
+      </div>
+
+      <div class="form-group">
+        <label for="input-clientid">Client ID / Services ID</label>
+        <input type="text" id="input-clientid" value="com.chainforge.merchant.signin">
+      </div>
+
+      <div class="form-group">
+        <label for="input-redirect">Redirect URI</label>
+        <input type="text" id="input-redirect" value="http://localhost:5173/api/auth/apple/callback">
+      </div>
+
+      <div class="form-group" style="margin-bottom: 0;">
+        <label for="input-delay">Simulation Delay (ms)</label>
+        <select id="input-delay">
+          <option value="500">500 ms (Fast)</option>
+          <option value="1200" selected>1200 ms (Realistic)</option>
+          <option value="3000">3000 ms (Slow network)</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- Simulator Column -->
+    <div class="response-section">
+      <!-- Top Box: Interaction -->
+      <div class="card" style="padding: 1.5rem 2rem;">
+        <h2>
+          <svg style="width:18px;height:18px;fill:currentColor" viewBox="0 0 24 24"><path d="M10,2H14A2,2 0 0,1 16,4V6H20A2,2 0 0,1 22,8V19A2,2 0 0,1 20,21H4A2,2 0 0,1 2,19V8A2,2 0 0,1 4,6H8V4A2,2 0 0,1 10,2M14,6V4H10V6H14M4,8V19H20V8H4M12,10A3,3 0 0,1 15,13A3,3 0 0,1 12,16A3,3 0 0,1 9,13A3,3 0 0,1 12,10Z"/></svg>
+          Interactive Workspace
+        </h2>
+        <div class="simulator-workspace">
+          <div class="workspace-instructions">
+            Click the branded button below to launch the simulated Apple authorization flow modal sheet.
+          </div>
+          
+          <!-- Branded Apple Button -->
+          <button class="apple-signin-btn" id="apple-trigger-btn">
+            <svg class="apple-logo-icon" viewBox="0 0 170 170">
+              <path d="M150.37 130.25c-2.45 5.66-5.35 10.87-8.71 15.66-4.58 6.53-8.33 11.05-11.22 13.56-4.48 4.12-9.28 6.23-14.42 6.35-3.69 0-8.14-1.05-13.32-3.18-5.19-2.12-9.97-3.17-14.34-3.17-4.58 0-9.49 1.05-14.75 3.17-5.26 2.13-9.5 3.24-12.74 3.35-4.34.13-9.13-1.92-14.35-6.15-2.88-2.38-6.67-6.88-11.37-13.5-3.48-4.9-6.47-10.23-8.98-15.98-2.5-5.75-4.78-12.16-6.82-19.25-2.05-7.09-3.07-14.16-3.07-21.21 0-11.83 2.85-21.57 8.56-29.23 5.7-7.66 13.06-11.49 22.06-11.49 4.35 0 9.25 1.23 14.69 3.69 5.44 2.46 9.02 3.69 10.74 3.69 1.83 0 5.49-1.23 10.99-3.69 5.5-2.46 10.05-3.63 13.66-3.5 10.4.5 18.59 4.41 24.57 11.75-8.5 5.17-12.69 12.28-12.56 21.32.13 6.94 2.63 12.75 7.51 17.44 4.88 4.69 10.79 7.23 17.75 7.62 2.5.13 5.06-.2 7.69-1 2.63-.8 4.89-1.91 6.78-3.34.7.7 2.06 2.14 4.1 4.3 2.05 2.16 3.28 3.59 3.69 4.3 1.96 3.5 3.73 7.84 5.3 13.02 1.57 5.18 2.37 9.87 2.41 14.07.03 1.5-.54 4.62-1.72 9.38zM118.66 14.99c0 5.75-2.14 11.23-6.43 16.44-4.29 5.21-9.45 8.79-15.48 10.74-1.24.42-2.3.62-3.18.62-.25 0-.58-.04-.98-.12.13-5.83 2.32-11.23 6.57-16.2 4.25-4.97 9.61-8.52 16.08-10.66 1.83-.62 3.1-.92 3.8-.92.12.08.31.29.57.62.4.67.62 1.48.62 2.48z"/>
+            </svg>
+            Sign in with Apple
+          </button>
+        </div>
+      </div>
+
+      <!-- Bottom Box: Output Visualizer -->
+      <div class="card" style="flex: 1;">
+        <div class="tabs-header">
+          <button class="tab-btn active" onclick="switchTab('tab-response')">Apple Callback Response</button>
+          <button class="tab-btn" onclick="switchTab('tab-jwt')">Parsed ID Token (JWT)</button>
+          <button class="tab-btn" onclick="switchTab('tab-code')">Implementation Snippet</button>
+        </div>
+
+        <!-- Tab 1: Callback payload -->
+        <div id="tab-response" class="tab-content active" style="margin-top: 1rem;">
+          <div class="code-container">
+            <div class="code-header">
+              <span>RESPONSE PAYLOAD (application/x-www-form-urlencoded format)</span>
+              <button class="copy-btn" onclick="copyText('json-output')">
+                <svg style="width:14px;height:14px;fill:currentColor" viewBox="0 0 24 24"><path d="M19,21H8V7H19M19,5H8A2,2 0 0,0 6,7V21A2,2 0 0,0 8,23H19A2,2 0 0,0 21,21V7A2,2 0 0,0 19,5M16,1H4A2,2 0 0,0 2,3V17H4V3H16V1Z"/></svg>
+                Copy
+              </button>
+            </div>
+            <pre><code id="json-output">// Click "Sign in with Apple" to run the simulation flow.</code></pre>
+          </div>
+        </div>
+
+        <!-- Tab 2: Parsed JWT -->
+        <div id="tab-jwt" class="tab-content" style="margin-top: 1rem;">
+          <div class="code-container">
+            <div class="code-header">
+              <span>ID_TOKEN DECODED</span>
+              <button class="copy-btn" onclick="copyText('jwt-raw-output')">
+                <svg style="width:14px;height:14px;fill:currentColor" viewBox="0 0 24 24"><path d="M19,21H8V7H19M19,5H8A2,2 0 0,0 6,7V21A2,2 0 0,0 8,23H19A2,2 0 0,0 21,21V7A2,2 0 0,0 19,5M16,1H4A2,2 0 0,0 2,3V17H4V3H16V1Z"/></svg>
+                Copy Raw Token
+              </button>
+            </div>
+            <pre><code id="jwt-output">// Click "Sign in with Apple" to decode and parse OIDC parameters.</code></pre>
+          </div>
+          <div style="display:none;" id="jwt-raw-output"></div>
+        </div>
+
+        <!-- Tab 3: Implementation Code -->
+        <div id="tab-code" class="tab-content" style="margin-top: 1rem;">
+          <div class="code-container">
+            <div class="code-header">
+              <span>EXPRESS.JS BACKEND VERIFICATION ROUTE</span>
+              <button class="copy-btn" onclick="copyText('impl-code')">
+                <svg style="width:14px;height:14px;fill:currentColor" viewBox="0 0 24 24"><path d="M19,21H8V7H19M19,5H8A2,2 0 0,0 6,7V21A2,2 0 0,0 8,23H19A2,2 0 0,0 21,21V7A2,2 0 0,0 19,5M16,1H4A2,2 0 0,0 2,3V17H4V3H16V1Z"/></svg>
+                Copy Code
+              </button>
+            </div>
+            <pre><code id="impl-code" class="json-string" style="color:#d1d5db;"><span style="color:#60a5fa;">import</span> jwt <span style="color:#60a5fa;">from</span> <span style="color:#34d399;">'jsonwebtoken'</span>;
+<span style="color:#60a5fa;">import</span> fetch <span style="color:#60a5fa;">from</span> <span style="color:#34d399;">'node-fetch'</span>;
+
+<span style="color:#e5e7eb; font-weight: 600;">// Apple Callback Route Handler</span>
+app.post(<span style="color:#34d399;">'/api/auth/apple/callback'</span>, <span style="color:#60a5fa;">async</span> (req, res) => {
+  <span style="color:#60a5fa;">const</span> { code, id_token, user } = req.body;
+  
+  <span style="color:#60a5fa;">try</span> {
+    <span style="color:#e5e7eb; font-weight: 600;">// 1. Verify id_token JWT (Signed by Apple Public Key)</span>
+    <span style="color:#60a5fa;">const</span> decoded = jwt.decode(id_token);
+    console.log(<span style="color:#34d399;">'Decoded Apple user profile:'</span>, decoded);
+    
+    <span style="color:#e5e7eb; font-weight: 600;">// 2. Parse initial registration info (only sent on FIRST sign-in)</span>
+    <span style="color:#60a5fa;">if</span> (user) {
+      <span style="color:#60a5fa;">const</span> { name, email } = JSON.parse(user);
+      console.log(<span style="color:#34d399;">'Registering user details:'</span>, name.firstName, name.lastName, email);
+    }
+    
+    <span style="color:#e5e7eb; font-weight: 600;">// 3. Establish session / generate local credentials JWT</span>
+    res.json({ success: <span style="color:#60a5fa;">true</span>, message: <span style="color:#34d399;">'Successfully authenticated!'</span>, user: decoded });
+  } <span style="color:#60a5fa;">catch</span> (err) {
+    res.status(<span style="color:#fbbf24;">400</span>).json({ success: <span style="color:#60a5fa;">false</span>, error: err.message });
+  }
+});</code></pre>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Simulated Apple Sign-In Modal Overlay -->
+  <div class="modal-overlay" id="apple-modal-overlay">
+    <div class="apple-modal">
+      
+      <!-- Apple loading state screen -->
+      <div class="apple-loading-overlay" id="apple-loading-screen">
+        <div class="spinner"></div>
+        <p id="loading-text">Verifying with Face ID...</p>
+      </div>
+
+      <div class="apple-modal-header">
+        <button class="close-btn" id="modal-close-btn">&times;</button>
+        <div class="apple-id-badge">
+          <!-- Official shape style Apple SVG -->
+          <svg viewBox="0 0 170 170">
+            <path d="M150.37 130.25c-2.45 5.66-5.35 10.87-8.71 15.66-4.58 6.53-8.33 11.05-11.22 13.56-4.48 4.12-9.28 6.23-14.42 6.35-3.69 0-8.14-1.05-13.32-3.18-5.19-2.12-9.97-3.17-14.34-3.17-4.58 0-9.49 1.05-14.75 3.17-5.26 2.13-9.5 3.24-12.74 3.35-4.34.13-9.13-1.92-14.35-6.15-2.88-2.38-6.67-6.88-11.37-13.5-3.48-4.9-6.47-10.23-8.98-15.98-2.5-5.75-4.78-12.16-6.82-19.25-2.05-7.09-3.07-14.16-3.07-21.21 0-11.83 2.85-21.57 8.56-29.23 5.7-7.66 13.06-11.49 22.06-11.49 4.35 0 9.25 1.23 14.69 3.69 5.44 2.46 9.02 3.69 10.74 3.69 1.83 0 5.49-1.23 10.99-3.69 5.5-2.46 10.05-3.63 13.66-3.5 10.4.5 18.59 4.41 24.57 11.75-8.5 5.17-12.69 12.28-12.56 21.32.13 6.94 2.63 12.75 7.51 17.44 4.88 4.69 10.79 7.23 17.75 7.62 2.5.13 5.06-.2 7.69-1 2.63-.8 4.89-1.91 6.78-3.34.7.7 2.06 2.14 4.1 4.3 2.05 2.16 3.28 3.59 3.69 4.3 1.96 3.5 3.73 7.84 5.3 13.02 1.57 5.18 2.37 9.87 2.41 14.07.03 1.5-.54 4.62-1.72 9.38zM118.66 14.99c0 5.75-2.14 11.23-6.43 16.44-4.29 5.21-9.45 8.79-15.48 10.74-1.24.42-2.3.62-3.18.62-.25 0-.58-.04-.98-.12.13-5.83 2.32-11.23 6.57-16.2 4.25-4.97 9.61-8.52 16.08-10.66 1.83-.62 3.1-.92 3.8-.92.12.08.31.29.57.62.4.67.62 1.48.62 2.48z"/>
+          </svg>
+        </div>
+        <h3>Apple ID</h3>
+        <p>Sign in with your Apple ID to continue</p>
+      </div>
+
+      <div class="apple-modal-body">
+        
+        <!-- App Details Box -->
+        <div class="app-request-info">
+          <div class="app-request-row">
+            <span class="app-request-label">Application</span>
+            <span class="app-request-value" id="modal-app-name">ChainForge</span>
+          </div>
+          <div class="app-request-row">
+            <span class="app-request-label">Developer</span>
+            <span class="app-request-value">ChainForge Foundation Ltd.</span>
+          </div>
+        </div>
+
+        <!-- Sharing Options (Simulates Apple Privacy) -->
+        <div class="sharing-options">
+          <div class="share-option-card selected" onclick="selectShareOption(this, 'share')">
+            <input type="radio" name="share-email" checked>
+            <div class="share-option-details">
+              <div class="share-option-title">Share My Email</div>
+              <div class="share-option-desc" id="lbl-share-email">alex.tan@gmail.com</div>
+            </div>
+          </div>
+          
+          <div class="share-option-card" onclick="selectShareOption(this, 'hide')">
+            <input type="radio" name="share-email">
+            <div class="share-option-details">
+              <div class="share-option-title">Hide My Email</div>
+              <div class="share-option-desc" id="lbl-relay-email">Forward to: alex.tan@gmail.com</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Primary Action buttons -->
+        <div class="apple-actions-container">
+          <button class="apple-btn-primary" id="apple-confirm-btn">Continue with Password</button>
+          <button class="apple-btn-secondary" id="modal-cancel-btn">Cancel</button>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast Notification -->
+  <div class="toast" id="copy-toast">
+    <svg style="width:18px;height:18px;fill:currentColor" viewBox="0 0 24 24"><path d="M21,7L9,19L3.5,13.5L4.91,12.09L9,16.17L19.59,5.59L21,7Z"/></svg>
+    Copied to clipboard!
+  </div>
+
+  <script>
+    // Elements references
+    const btnTrigger = document.getElementById('apple-trigger-btn');
+    const modalOverlay = document.getElementById('apple-modal-overlay');
+    const modalCloseBtn = document.getElementById('modal-close-btn');
+    const modalCancelBtn = document.getElementById('modal-cancel-btn');
+    const modalConfirmBtn = document.getElementById('apple-confirm-btn');
+    const loadingScreen = document.getElementById('apple-loading-screen');
+    const loadingText = document.getElementById('loading-text');
+    
+    // Config Input elements
+    const inFname = document.getElementById('input-fname');
+    const inLname = document.getElementById('input-lname');
+    const inEmail = document.getElementById('input-email');
+    const inClientId = document.getElementById('input-clientid');
+    const inRedirect = document.getElementById('input-redirect');
+    const inDelay = document.getElementById('input-delay');
+
+    // Label placeholders in Apple Modal
+    const lblShareEmail = document.getElementById('lbl-share-email');
+    const lblRelayEmail = document.getElementById('lbl-relay-email');
+    const lblAppName = document.getElementById('modal-app-name');
+
+    // State Variables
+    let selectedEmailMode = 'share'; // 'share' or 'hide'
+
+    // Form sync event: Update labels inside the modal sheet as the user edits the form
+    function syncModalLabels() {
+      const emailVal = inEmail.value || 'user@appleid.com';
+      const clientVal = inClientId.value || 'com.example.app';
+      
+      lblShareEmail.textContent = emailVal;
+      lblRelayEmail.textContent = `Forward to: ${emailVal}`;
+      
+      // Attempt clean name extracting from Client ID
+      const parts = clientVal.split('.');
+      const cleanName = parts.length > 1 ? parts[parts.length - 2].toUpperCase() : clientVal;
+      lblAppName.textContent = cleanName.charAt(0) + cleanName.slice(1).toLowerCase();
+    }
+
+    inEmail.addEventListener('input', syncModalLabels);
+    inClientId.addEventListener('input', syncModalLabels);
+    syncModalLabels();
+
+    // Trigger buttons to open simulated modal
+    btnTrigger.addEventListener('click', () => {
+      syncModalLabels();
+      
+      // Set random biometric or key loading string
+      const bioAuths = ["Verifying with Touch ID...", "Verifying with Face ID...", "Connecting to Apple ID..."];
+      loadingText.textContent = bioAuths[Math.floor(Math.random() * bioAuths.length)];
+      
+      modalOverlay.classList.add('active');
+    });
+
+    // Close actions
+    function closeModal() {
+      modalOverlay.classList.remove('active');
+      loadingScreen.classList.remove('active');
+    }
+
+    modalCloseBtn.addEventListener('click', closeModal);
+    modalCancelBtn.addEventListener('click', closeModal);
+
+    // Share Selection toggling
+    function selectShareOption(element, mode) {
+      selectedEmailMode = mode;
+      document.querySelectorAll('.share-option-card').forEach(card => {
+        card.classList.remove('selected');
+        card.querySelector('input[type="radio"]').checked = false;
+      });
+      element.classList.add('selected');
+      element.querySelector('input[type="radio"]').checked = true;
+    }
+
+    // OIDC JWT Builder
+    function base64UrlEncode(obj) {
+      const str = JSON.stringify(obj);
+      return btoa(unescape(encodeURIComponent(str)))
+        .replace(/=/g, "")
+        .replace(/\+/g, "-")
+        .replace(/\//g, "_");
+    }
+
+    function createMockAppleJWT(payload) {
+      const header = {
+        alg: "RS256",
+        kid: "apple-mock-key-2026",
+        typ: "JWT"
+      };
+      
+      const headerB64 = base64UrlEncode(header);
+      const payloadB64 = base64UrlEncode(payload);
+      const signatureB64 = "MOCK_SIGNATURE_BASE64URL_VALUE_THAT_REPRESENTS_APPLE_PRIVATE_KEY_SIGNING";
+      
+      return `${headerB64}.${payloadB64}.${signatureB64}`;
+    }
+
+    // Click confirm authentication action
+    modalConfirmBtn.addEventListener('click', () => {
+      // Show loading spinner page
+      loadingScreen.classList.add('active');
+      
+      const delayMs = parseInt(inDelay.value) || 1200;
+      
+      setTimeout(() => {
+        // Build mock credentials
+        const firstName = inFname.value || 'Alex';
+        const lastName = inLname.value || 'Tan';
+        const rawEmail = inEmail.value || 'user@appleid.com';
+        
+        // Handle anonymous private relay email if chosen
+        let emailToReport = rawEmail;
+        let isPrivate = "false";
+        if (selectedEmailMode === 'hide') {
+          const hashVal = Math.random().toString(36).substring(2, 12);
+          emailToReport = `${hashVal}@privaterelay.appleid.com`;
+          isPrivate = "true";
+        }
+
+        const uniqueUserId = "001394.c9048a12e5ab4832be0f882ad1b6c0b3.0426";
+        const codeValue = "m_auth_code_" + Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
+        
+        // Apple JWT Token payload parameters
+        const jwtPayload = {
+          iss: "https://appleid.apple.com",
+          aud: inClientId.value || "com.chainforge.merchant.signin",
+          exp: Math.floor(Date.now() / 1000) + 3600,
+          iat: Math.floor(Date.now() / 1000),
+          sub: uniqueUserId,
+          at_hash: "mock-access-token-hash-xyz",
+          email: emailToReport,
+          email_verified: "true",
+          is_private_email: isPrivate,
+          auth_time: Math.floor(Date.now() / 1000),
+          nonce_supported: true
+        };
+
+        const idToken = createMockAppleJWT(jwtPayload);
+
+        // Apple User Profile registration (ONLY sent during initial transaction/authorization)
+        const userProfile = {
+          name: {
+            firstName: firstName,
+            lastName: lastName
+          },
+          email: emailToReport
+        };
+
+        // Form callback parameters simulated response
+        const mockCallbackResponse = {
+          state: "mock-session-state-parameter-1234",
+          code: codeValue,
+          id_token: idToken,
+          user: JSON.stringify(userProfile)
+        };
+
+        // Render response data visually in the views
+        renderOutputs(mockCallbackResponse, jwtPayload, idToken);
+        
+        // Auto-switch tabs to results response container
+        switchTab('tab-response');
+        
+        // Hide loader & close sheet
+        closeModal();
+        showToast();
+      }, delayMs);
+    });
+
+    // Color-codes JSON properties output natively
+    function syntaxHighlightJSON(json) {
+      if (typeof json != 'string') {
+        json = JSON.stringify(json, undefined, 2);
+      }
+      json = json.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      return json.replace(/("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?)/g, function (match) {
+        let cls = 'json-number';
+        if (/^"/.test(match)) {
+          if (/:$/.test(match)) {
+            cls = 'json-key';
+          } else {
+            cls = 'json-string';
+          }
+        } else if (/true|false/.test(match)) {
+          cls = 'json-boolean';
+        } else if (/null/.test(match)) {
+          cls = 'json-null';
+        }
+        return '<span class="' + cls + '">' + match + '</span>';
+      });
+    }
+
+    function renderOutputs(response, jwtPayload, idToken) {
+      // Render JSON response
+      const jsonContainer = document.getElementById('json-output');
+      jsonContainer.innerHTML = syntaxHighlightJSON(response);
+
+      // Render JWT structure
+      const jwtContainer = document.getElementById('jwt-output');
+      const tokenParts = idToken.split('.');
+      
+      const jwtHeaderObj = {
+        alg: "RS256",
+        kid: "apple-mock-key-2026",
+        typ: "JWT"
+      };
+
+      jwtContainer.innerHTML = `
+<div class="jwt-display">
+  <div class="jwt-segment-header">JOSE Header (Base64url Encoded: Part 1)</div>
+  <div class="jwt-part jwt-header-part">${tokenParts[0]}</div>
+  <div class="jwt-segment-header">Decoded Header Payload JSON</div>
+  <div>${syntaxHighlightJSON(jwtHeaderObj)}</div>
+  
+  <div class="jwt-segment-header">Claims Payload (Base64url Encoded: Part 2)</div>
+  <div class="jwt-part jwt-payload-part">${tokenParts[1]}</div>
+  <div class="jwt-segment-header">Decoded Claims JSON (User Info)</div>
+  <div>${syntaxHighlightJSON(jwtPayload)}</div>
+  
+  <div class="jwt-segment-header">Cryptographic Signature (Base64url Encoded: Part 3)</div>
+  <div class="jwt-part jwt-signature-part">${tokenParts[2]}</div>
+</div>
+      `;
+
+      // Save raw token for copies
+      document.getElementById('jwt-raw-output').textContent = idToken;
+    }
+
+    // Interactive Tab switches
+    function switchTab(tabId) {
+      document.querySelectorAll('.tab-content').forEach(content => {
+        content.classList.remove('active');
+      });
+      document.querySelectorAll('.tab-btn').forEach(btn => {
+        btn.classList.remove('active');
+      });
+
+      document.getElementById(tabId).classList.add('active');
+      
+      // Match active headers button highlight
+      const tabs = ['tab-response', 'tab-jwt', 'tab-code'];
+      const index = tabs.indexOf(tabId);
+      if (index !== -1) {
+        document.querySelectorAll('.tab-btn')[index].classList.add('active');
+      }
+    }
+
+    // Helper: Toast alerts displayer
+    function showToast() {
+      const toast = document.getElementById('copy-toast');
+      toast.classList.add('show');
+      setTimeout(() => {
+        toast.classList.remove('show');
+      }, 2500);
+    }
+
+    // Helper: Copies code details to OS clipboard
+    function copyText(elementId) {
+      const element = document.getElementById(elementId);
+      let textToCopy = "";
+      
+      if (elementId === 'json-output') {
+        // Strip tags if syntax highlighted
+        textToCopy = element.innerText;
+      } else {
+        textToCopy = element.textContent;
+      }
+      
+      navigator.clipboard.writeText(textToCopy).then(() => {
+        showToast();
+      }).catch(err => {
+        console.error('Failed to copy text: ', err);
+      });
+    }
+  </script>
+</body>
+</html>

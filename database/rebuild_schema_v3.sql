@@ -9,6 +9,7 @@ DROP TABLE IF EXISTS `settlements`;
 DROP TABLE IF EXISTS `blockchain_transactions`;
 DROP TABLE IF EXISTS `payments`;
 DROP TABLE IF EXISTS `merchant_payouts`;
+DROP TABLE IF EXISTS `kyc_submissions`;
 DROP TABLE IF EXISTS `supported_assets`;
 DROP TABLE IF EXISTS `merchant_users`;
 DROP TABLE IF EXISTS `merchants`;
@@ -25,6 +26,7 @@ CREATE TABLE `merchants` (
   `account_last4` varchar(4) DEFAULT NULL,
   `bank_account_label` varchar(20) DEFAULT NULL, -- UEN
   `status` varchar(50) NOT NULL DEFAULT 'ACTIVE_UNVERIFIED',
+  `kyc_status` enum('PENDING','APPROVED','REJECTED','MANUAL_REVIEW') NOT NULL DEFAULT 'PENDING',
   `triplea_merchant_id` varchar(64) DEFAULT NULL,
   `triplea_wallet_id` varchar(64) DEFAULT NULL,
   `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -42,11 +44,60 @@ CREATE TABLE `merchant_users` (
   `password_hash` varchar(255) NOT NULL,
   `password_salt` varchar(64) NOT NULL,
   `full_name` varchar(255) NOT NULL,
+  `role` enum('CEO','CFO','TECH_LEAD') NOT NULL,
   `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
   UNIQUE KEY `uq_merchant_users_email` (`email`),
+  UNIQUE KEY `uq_merchant_users_merchant_role` (`merchant_id`, `role`),
   KEY `idx_merchant_users_merchant_id` (`merchant_id`),
   CONSTRAINT `fk_merchant_users_merchants` FOREIGN KEY (`merchant_id`) REFERENCES `merchants` (`id`) ON DELETE CASCADE ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- KYB (Know Your Business) submissions for merchant onboarding verification.
+CREATE TABLE `kyc_submissions` (
+  `kyc_submission_id` varchar(36) NOT NULL,
+  `merchant_id` int NOT NULL,
+  -- Business details
+  `business_type` enum('SOLE_PROPRIETOR','PARTNERSHIP','PRIVATE_LIMITED','LLP') NOT NULL,
+  `industry_sector` varchar(100) NOT NULL,
+  `registered_address` text NOT NULL,
+  `website_url` varchar(255) DEFAULT NULL,
+  `sales_channel` varchar(100) DEFAULT NULL,
+  -- Ownership (UBO — Ultimate Beneficial Owner)
+  `shareholder_count` int unsigned DEFAULT NULL,
+  `has_ubo_above_25` tinyint(1) NOT NULL DEFAULT 0,
+  `ubo_full_name` varchar(255) DEFAULT NULL,
+  -- Authorized representative
+  `rep_full_name` varchar(255) NOT NULL,
+  `rep_designation` varchar(100) NOT NULL,
+  `rep_contact_number` varchar(20) NOT NULL,
+  `rep_nric_last4` varchar(4) DEFAULT NULL,
+  -- Compliance declarations
+  `monthly_volume_tier` enum('BELOW_10K','10K_50K','50K_200K','ABOVE_200K') NOT NULL,
+  `source_of_funds` varchar(100) DEFAULT NULL,
+  `pep_declaration` tinyint(1) NOT NULL DEFAULT 0,
+  `terms_accepted` tinyint(1) NOT NULL DEFAULT 0,
+  `info_accurate_declaration` tinyint(1) NOT NULL DEFAULT 0,
+  -- Simulated ACRA verification
+  `acra_verified` tinyint(1) NOT NULL DEFAULT 0,
+  `acra_verification_ref` varchar(64) DEFAULT NULL,
+  -- n8n workflow tracking
+  `n8n_execution_id` varchar(128) DEFAULT NULL,
+  `risk_score` int DEFAULT NULL,
+  `risk_tier` enum('LOW','MEDIUM','HIGH') DEFAULT NULL,
+  `screening_results` json DEFAULT NULL,
+  -- Status tracking
+  `status` enum('SUBMITTED','UNDER_REVIEW','APPROVED','REJECTED','MANUAL_REVIEW') NOT NULL DEFAULT 'SUBMITTED',
+  `reviewer_notes` text DEFAULT NULL,
+  `submitted_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `reviewed_at` timestamp NULL DEFAULT NULL,
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`kyc_submission_id`),
+  KEY `idx_kyc_merchant` (`merchant_id`),
+  KEY `idx_kyc_status` (`status`),
+  CONSTRAINT `fk_kyc_merchants` FOREIGN KEY (`merchant_id`)
+    REFERENCES `merchants` (`id`) ON DELETE CASCADE ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ── 3. Create supported_assets table ──

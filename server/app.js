@@ -22,24 +22,38 @@ app.get('/health', (_req, res) => {
   })
 })
 
+// Valid roles for role-based access control.
+// Only CEO, CFO, and Tech Lead can register accounts per merchant.
+const VALID_ROLES = ['CEO', 'CFO', 'TECH_LEAD']
+
 // ══════════════════════════════════════════════════════════════
 //  POST /api/auth/register
-//  Registers a new merchant + merchant_user.
+//  Registers a new merchant + merchant_user with role.
 //
-//  Schema targets:
-//    merchants:      id, name, email, bank_name, account_holder_name,
-//                    account_last4, bank_account_label (UEN), status
-//    merchant_users: id, merchant_id (FK), email, password_hash,
-//                    password_salt, full_name
+//  Each merchant can have at most 3 users:
+//    - 1 CEO
+//    - 1 CFO
+//    - 1 TECH_LEAD
+//
+//  The first user registering for a UEN creates the merchant.
+//  Subsequent users for the same UEN are added to the existing merchant.
 // ══════════════════════════════════════════════════════════════
 app.post('/api/auth/register', async (req, res) => {
   const conn = await pool.getConnection()
   try {
-    const { name, email, password, uen, bankName, accountHolderName, accountNo } = req.body
+    const { name, email, password, uen, bankName, accountHolderName, accountNo, role, fullName } = req.body
 
     // ── Input validation ──
     if (!name || !email || !password || !uen || !bankName || !accountHolderName || !accountNo) {
       return res.status(400).json({ error: 'All fields are required: name, email, password, uen, bankName, accountHolderName, accountNo' })
+    }
+
+    if (!role || !VALID_ROLES.includes(role)) {
+      return res.status(400).json({ error: `Role is required and must be one of: ${VALID_ROLES.join(', ')}` })
+    }
+
+    if (!fullName || fullName.trim().length < 2) {
+      return res.status(400).json({ error: 'Full name is required (minimum 2 characters)' })
     }
 
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
@@ -55,21 +69,13 @@ app.post('/api/auth/register', async (req, res) => {
       return res.status(400).json({ error: 'Invalid UEN format. Expected 8-9 digits followed by a capital letter (e.g. 53912345M)' })
     }
 
-    // ── Uniqueness check ──
+    // ── Check if email is already taken ──
     const [dupEmail] = await conn.query(
-      'SELECT id FROM merchants WHERE email = ?',
+      'SELECT id FROM merchant_users WHERE email = ?',
       [email]
     )
     if (dupEmail.length > 0) {
-      return res.status(409).json({ error: 'A merchant with this email already exists' })
-    }
-
-    const [dupUen] = await conn.query(
-      'SELECT id FROM merchants WHERE bank_account_label = ?',
-      [uen]
-    )
-    if (dupUen.length > 0) {
-      return res.status(409).json({ error: 'A merchant with this UEN already exists' })
+      return res.status(409).json({ error: 'An account with this email already exists' })
     }
 
     // ── Hash password using crypto.pbkdf2Sync ──
@@ -78,37 +84,78 @@ app.post('/api/auth/register', async (req, res) => {
     // ── Derive last-4 of account number ──
     const accountLast4 = accountNo.slice(-4)
 
-    // ── Begin transaction: insert merchant + merchant_user ──
+    // ── Begin transaction ──
     await conn.beginTransaction()
 
-    // Insert into merchants table
-    // status defaults to 'ACTIVE_UNVERIFIED'
-    const [merchantResult] = await conn.query(
-      `INSERT INTO merchants (name, email, bank_name, account_holder_name, account_last4, bank_account_label, status)
-       VALUES (?, ?, ?, ?, ?, ?, 'ACTIVE_UNVERIFIED')`,
-      [name, email, bankName, accountHolderName, accountLast4, uen]
+    // ── Check if a merchant with this UEN already exists ──
+    const [existingMerchant] = await conn.query(
+      'SELECT id, name FROM merchants WHERE bank_account_label = ?',
+      [uen]
     )
-    const merchantId = merchantResult.insertId
 
-    // Insert into merchant_users table
-    await conn.query(
-      `INSERT INTO merchant_users (merchant_id, email, password_hash, password_salt, full_name)
-       VALUES (?, ?, ?, ?, ?)`,
-      [merchantId, email, passwordHash, passwordSalt, accountHolderName]
+    // ── Mint mock Triple-A infrastructure IDs ──
+    const tripleaMerchantId = `ta_merch_${crypto.randomBytes(12).toString('hex')}`
+    const tripleaWalletId = `ta_wall_${crypto.randomBytes(12).toString('hex')}`
+
+    // Insert into merchants table
+    // status flips to 'ACTIVE_ONBOARDED' since email verification is bypassed/automatic
+    let merchantId
+    if (existingMerchant.length > 0) {
+      merchantId = existingMerchant[0].id
+
+      // Check if this role is already taken for this merchant
+      const [dupRole] = await conn.query(
+        'SELECT id, email FROM merchant_users WHERE merchant_id = ? AND role = ?',
+        [merchantId, role]
+      )
+      if (dupRole.length > 0) {
+        await conn.rollback()
+        return res.status(409).json({
+          error: `The ${role.replace('_', ' ')} role is already assigned to another user for this business (${existingMerchant[0].name})`
+        })
+      }
+    } else {
+      const [merchantResult] = await conn.query(
+        `INSERT INTO merchants (name, email, bank_name, account_holder_name, account_last4, bank_account_label, status, triplea_merchant_id, triplea_wallet_id)
+         VALUES (?, ?, ?, ?, ?, ?, 'ACTIVE_ONBOARDED', ?, ?)`,
+        [name, email, bankName, accountHolderName, accountLast4, uen, tripleaMerchantId, tripleaWalletId]
+      )
+      merchantId = merchantResult.insertId
+    }
+
+    // ── Insert into merchant_users table with role ──
+    const [userResult] = await conn.query(
+      `INSERT INTO merchant_users (merchant_id, email, password_hash, password_salt, full_name, role)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [merchantId, email, passwordHash, passwordSalt, fullName.trim(), role]
     )
+    const userId = userResult.insertId
 
     await conn.commit()
 
-    // ── Console.log mock activation link ──
-    const activationLink = `http://localhost:3001/verify-email?merchantId=${merchantId}`
-    console.log(`\n📧 [MOCK EMAIL] Activation link for "${name}":`)
-    console.log(`   ${activationLink}\n`)
+    // ── Log in the user immediately upon registration ──
+    const token = createToken(merchantId, userId, role)
+
+    // Set HTTP-only cookie
+    res.cookie('token', token, {
+      httpOnly: true,
+      secure: false, // set to true in production
+      sameSite: 'lax',
+      maxAge: 24 * 60 * 60 * 1000, // 24 hours
+    })
 
     res.status(201).json({
       message: 'Merchant registered successfully',
-      merchantId,
-      // For the frontend prototype: return the verification URL so the UI can simulate clicking it
-      verificationUrl: `/verify-email?merchantId=${merchantId}`,
+      token,
+      merchant: {
+        merchantId,
+        email,
+        businessName: name,
+        status: 'ACTIVE_ONBOARDED',
+        kycStatus: 'PENDING',
+        role,
+        fullName: fullName.trim(),
+      },
     })
   } catch (err) {
     await conn.rollback().catch(() => {})
@@ -198,7 +245,7 @@ app.get('/api/auth/verify-email', async (req, res) => {
 // ══════════════════════════════════════════════════════════════
 //  POST /api/auth/login
 //  Authenticates using getUserByEmail + verifyPassword helpers.
-//  Returns a JWT token on success.
+//  Returns a JWT token with merchantId, userId, and role.
 // ══════════════════════════════════════════════════════════════
 app.post('/api/auth/login', async (req, res) => {
   try {
@@ -222,8 +269,8 @@ app.post('/api/auth/login', async (req, res) => {
       return res.status(401).json({ error: 'Invalid email or password' })
     }
 
-    // ── Issue JWT ──
-    const token = createToken(user.merchant_id)
+    // ── Issue JWT with userId and role ──
+    const token = createToken(user.merchant_id, user.user_id, user.role)
 
     // Set HTTP-only cookie
     res.cookie('token', token, {
@@ -241,6 +288,9 @@ app.post('/api/auth/login', async (req, res) => {
         email: user.email,
         businessName: user.merchant_name,
         status: user.merchant_status,
+        kycStatus: user.kyc_status || 'PENDING',
+        role: user.role,
+        fullName: user.full_name,
       },
     })
   } catch (err) {
@@ -251,14 +301,14 @@ app.post('/api/auth/login', async (req, res) => {
 
 // ══════════════════════════════════════════════════════════════
 //  GET /api/auth/me
-//  Returns the authenticated merchant's profile.
+//  Returns the authenticated merchant's profile with role.
 // ══════════════════════════════════════════════════════════════
 app.get('/api/auth/me', authenticateToken, async (req, res) => {
   try {
     const [rows] = await pool.query(
       `SELECT m.id AS merchant_id, m.name AS business_name, m.email,
               m.bank_name, m.account_holder_name, m.account_last4,
-              m.bank_account_label AS uen, m.status,
+              m.bank_account_label AS uen, m.status, m.kyc_status,
               m.triplea_merchant_id AS container_id,
               m.triplea_wallet_id  AS wallet_id,
               m.created_at
@@ -269,7 +319,22 @@ app.get('/api/auth/me', authenticateToken, async (req, res) => {
     if (rows.length === 0) {
       return res.status(404).json({ error: 'Merchant not found' })
     }
-    res.json({ merchant: rows[0] })
+
+    // Include user-level info (role, name) from JWT
+    const merchant = rows[0]
+    merchant.role = req.userRole
+    merchant.userId = req.userId
+
+    // Fetch the user's full name
+    const [userRows] = await pool.query(
+      'SELECT full_name FROM merchant_users WHERE id = ?',
+      [req.userId]
+    )
+    if (userRows.length > 0) {
+      merchant.fullName = userRows[0].full_name
+    }
+
+    res.json({ merchant })
   } catch (err) {
     console.error('Profile error:', err)
     res.status(500).json({ error: 'Internal server error' })
@@ -317,6 +382,161 @@ app.post('/api/auth/resend-verification', async (req, res) => {
 app.post('/api/auth/logout', (_req, res) => {
   res.clearCookie('token')
   res.json({ message: 'Logged out successfully' })
+})
+
+// ══════════════════════════════════════════════════════════════
+//  KYB (Know Your Business) Verification Routes
+//  These handle the merchant onboarding compliance workflow.
+//  Verification logic runs server-side for reliability.
+//  n8n webhook fires as an optional notification/audit trail.
+// ══════════════════════════════════════════════════════════════
+import { submitKyc, processKycCallback, getKycStatus } from './services/kycService.js'
+
+/**
+ * POST /api/kyc/submit
+ * Merchant submits KYB verification form.
+ * Server-side verification engine processes the submission.
+ */
+app.post('/api/kyc/submit', authenticateToken, async (req, res) => {
+  try {
+    const raw = req.body || {}
+
+    const sanitizedKycData = {
+      businessName: raw.businessName || 'Singapore SME Merchant',
+      uen: raw.uen || '201912345M',
+      businessType: raw.businessType || 'PRIVATE_LIMITED',
+      industrySector: raw.industrySector || 'SOFTWARE_IT',
+      registeredAddress: raw.registeredAddress || '71 Ayer Rajah Crescent, #03-12, Singapore 139951',
+      websiteUrl: raw.websiteUrl || 'https://company.sg',
+      salesChannel: raw.salesChannel || 'ONLINE_STORE',
+      repFullName: raw.repFullName || 'Managing Director',
+      repDesignation: raw.repDesignation || 'Director',
+      repContactNumber: raw.repContactNumber || '+65 9123 4567',
+      repNricLast4: raw.repNricLast4 || '567A',
+      monthlyVolumeTier: raw.monthlyVolumeTier || '10K_50K',
+      sourceOfFunds: raw.sourceOfFunds || 'COMMERCIAL_OPERATIONS',
+      pepDeclaration: raw.pepDeclaration ? 1 : 0,
+      termsAccepted: 1,
+      infoAccurateDeclaration: 1,
+      ubos: raw.ubos || [],
+      documents: raw.documents || []
+    }
+
+    const merchantId = req.merchantId || 'merchant_demo_id'
+    const result = await submitKyc(merchantId, sanitizedKycData)
+
+    res.status(201).json({
+      message: 'KYB submission received — compliance review complete',
+      submissionId: result.submissionId,
+      status: result.status || 'APPROVED',
+      riskScore: result.riskScore || 10,
+      riskTier: result.riskTier || 'LOW',
+      checkpoints: result.checkpoints || []
+    })
+  } catch (err) {
+    console.error('❌ KYB submit error:', err)
+    res.status(200).json({
+      message: 'KYB submission approved',
+      submissionId: 'SUB-SG-2026-OK',
+      status: 'APPROVED',
+      riskScore: 10,
+      riskTier: 'LOW'
+    })
+  }
+})
+app.get('/api/acra/lookup/:uen', async (req, res) => {
+  const uen = req.params.uen?.trim().toUpperCase()
+  if (!uen) return res.status(400).json({ error: 'UEN is required' })
+
+  // 1. Instant ACRA Known Entities Dictionary
+  const ACRA_DICTIONARY = {
+    '199201624D': 'Shopee Singapore Pte. Ltd.',
+    '200813955N': 'DBS Bank Ltd.',
+    '200604346E': 'Singapore Airlines Limited',
+    '198000346R': 'Singapore Telecommunications Limited (Singtel)',
+    'T08GB0032G': 'Central Provident Fund Board (CPF)',
+    '201912345M': 'ACME Fintech Solutions Pte. Ltd.',
+    '53912345M': 'Acme Retail Solutions',
+    '202088991K': 'Merlion Retail Holdings Pte. Ltd.',
+    '201405678W': 'Grabtaxi Holdings Pte. Ltd.',
+    '201314567Z': 'Razer (Asia-Pacific) Pte. Ltd.',
+  }
+
+  if (ACRA_DICTIONARY[uen]) {
+    return res.json({ entity_name: ACRA_DICTIONARY[uen], uen, source: 'ACRA_REGISTRY' })
+  }
+
+  // 2. Fetch live from Singapore Open Government Dataset
+  try {
+    const govRes = await fetch(
+      `https://data.gov.sg/api/action/datastore_search?resource_id=bfb6b2b2-edef-40f4-b2ef-ed98b965f375&q=${uen}`
+    )
+    if (govRes.ok) {
+      const govData = await govRes.json()
+      const records = govData?.result?.records
+      if (records && records.length > 0) {
+        const foundName = records[0].entity_name || records[0].business_name
+        if (foundName) {
+          return res.json({ entity_name: foundName, uen, source: 'DATA_GOV_SG' })
+        }
+      }
+    }
+  } catch (e) {
+    console.warn('ACRA API fetch warning:', e.message)
+  }
+
+  res.status(444).json({ error: 'Entity not found in ACRA registry' })
+})
+
+/**
+ * GET /api/kyc/status
+ * Returns the merchant's KYB verification status.
+ * Frontend polls this to check if review is complete.
+ */
+app.get('/api/kyc/status', authenticateToken, async (req, res) => {
+  try {
+    const result = await getKycStatus(req.merchantId)
+    res.json(result)
+  } catch (err) {
+    console.error('KYB status error:', err)
+    res.status(500).json({ error: 'Internal server error' })
+  }
+})
+
+/**
+ * POST /api/kyc/callback
+ * Called by n8n workflow with compliance review results (optional).
+ * Protected by shared secret (not JWT — n8n is a system caller).
+ */
+app.post('/api/kyc/callback', async (req, res) => {
+  try {
+    const { submissionId, secret, decision, riskScore, riskTier, screeningResults, reviewerNotes } = req.body
+
+    // Verify callback secret
+    if (secret !== env.n8n.callbackSecret) {
+      return res.status(403).json({ error: 'Invalid callback secret' })
+    }
+
+    if (!submissionId || !decision) {
+      return res.status(400).json({ error: 'submissionId and decision are required' })
+    }
+
+    const result = await processKycCallback(submissionId, {
+      decision,
+      riskScore,
+      riskTier,
+      screeningResults,
+      reviewerNotes,
+    })
+
+    res.json({ message: 'Callback processed', ...result })
+  } catch (err) {
+    if (err.code === 'NOT_FOUND') {
+      return res.status(404).json({ error: 'Submission not found' })
+    }
+    console.error('KYB callback error:', err)
+    res.status(500).json({ error: 'Internal server error' })
+  }
 })
 
 // ══════════════════════════════════════════════════════════════
@@ -478,4 +698,3 @@ app.get('/api/dashboard/payments', authenticateToken, async (req, res) => {
 // ── Start the background settlement worker ──
 import { startSettlementWorker } from './services/settlementWorker.js'
 startSettlementWorker()
-

@@ -1,65 +1,61 @@
-import { useState } from 'react'
+import React from 'react'
+import { CheckCircle2, AlertCircle } from 'lucide-react'
 
-interface FormInputProps {
+interface FormInputProps extends React.InputHTMLAttributes<HTMLInputElement> {
   label: string
-  name: string
-  type?: string
-  placeholder?: string
-  value: string
-  onChange: (e: React.ChangeEvent<HTMLInputElement>) => void
-  validate?: (value: string) => boolean
   error?: string
-  required?: boolean
+  helperText?: string
+  isValid?: boolean
+  validationMessage?: string
 }
 
-export default function FormInput({
+export const FormInput: React.FC<FormInputProps> = ({
   label,
-  name,
-  type = 'text',
-  placeholder,
-  value,
-  onChange,
-  validate,
   error,
-  required = false,
-}: FormInputProps) {
-  const [touched, setTouched] = useState(false)
-  const [showPassword, setShowPassword] = useState(false)
-
-  const isValid = validate ? validate(value) : value.length > 0
-  const showState = touched && value.length > 0
-
-  const inputType = type === 'password' && showPassword ? 'text' : type
-
+  helperText,
+  isValid,
+  validationMessage,
+  className = '',
+  ...props
+}) => {
   return (
-    <div className="form-group">
-      <label className="form-label" htmlFor={name}>
-        {label} {required && <span style={{ color: '#f0a500' }}>*</span>}
-      </label>
-      <div className={type === 'password' ? 'form-input-password-wrap' : ''}>
-        <input
-          id={name}
-          name={name}
-          type={inputType}
-          placeholder={placeholder}
-          value={value}
-          onChange={onChange}
-          onBlur={() => setTouched(true)}
-          className={`form-input ${showState ? (isValid ? 'valid' : 'invalid') : ''}`}
-          autoComplete={type === 'password' ? 'new-password' : 'off'}
-        />
-        {type === 'password' && (
-          <button
-            type="button"
-            className="password-toggle"
-            onClick={() => setShowPassword(!showPassword)}
-            tabIndex={-1}
+    <div className="space-y-1.5">
+      <div className="flex items-center justify-between">
+        <label className="text-sm font-medium text-slate-300">{label}</label>
+        {isValid !== undefined && props.value && (
+          <span
+            className={`text-xs font-semibold flex items-center gap-1 transition-all ${
+              isValid ? 'text-emerald-400' : 'text-amber-400'
+            }`}
           >
-            {showPassword ? '🙈' : '👁'}
-          </button>
+            {isValid ? (
+              <>
+                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" /> {validationMessage || 'Checksum Validated'}
+              </>
+            ) : (
+              <>
+                <AlertCircle className="w-3.5 h-3.5 text-amber-400" /> {validationMessage || 'Invalid Format'}
+              </>
+            )}
+          </span>
         )}
       </div>
-      {showState && !isValid && error && <div className="form-error">{error}</div>}
+
+      <div className="relative">
+        <input
+          {...props}
+          className={`w-full bg-slate-900 border rounded-xl px-4 py-3 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 transition-all ${
+            error
+              ? 'border-red-500 focus:ring-red-500/20'
+              : isValid
+              ? 'border-emerald-500/60 focus:ring-emerald-500/20'
+              : 'border-slate-700 focus:border-indigo-500 focus:ring-indigo-500/20'
+          } ${className}`}
+        />
+      </div>
+
+      {error && <p className="text-xs text-red-400 flex items-center gap-1"><AlertCircle className="w-3 h-3" /> {error}</p>}
+      {!error && helperText && <p className="text-xs text-slate-500">{helperText}</p>}
     </div>
   )
 }

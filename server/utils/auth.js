@@ -51,12 +51,14 @@ export async function getUserByEmail(pool, email) {
        mu.password_hash,
        mu.password_salt,
        mu.full_name,
+       mu.role,
        m.name       AS merchant_name,
        m.status     AS merchant_status,
        m.bank_name,
        m.account_holder_name,
        m.account_last4,
        m.bank_account_label,
+       m.kyc_status,
        m.triplea_merchant_id,
        m.triplea_wallet_id
      FROM merchant_users mu

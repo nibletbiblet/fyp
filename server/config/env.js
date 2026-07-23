@@ -26,4 +26,10 @@ export const env = {
   },
   jwtSecret: process.env.JWT_SECRET ?? 'dev-jwt-secret-change-in-production',
   encryptionKey: process.env.ENCRYPTION_KEY ?? '0000000000000000000000000000000000000000000000000000000000000000',
+  n8n: {
+    webhookUrl: process.env.N8N_WEBHOOK_URL ?? 'http://localhost:5678/webhook/kyc-review',
+    callbackSecret: process.env.N8N_CALLBACK_SECRET ?? 'dev-n8n-callback-secret',
+    tunnelUrl: process.env.TUNNEL_URL ?? '',
+  },
 }
+

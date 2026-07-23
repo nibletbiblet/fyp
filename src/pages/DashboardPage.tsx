@@ -203,6 +203,7 @@ export default function DashboardPage() {
           return
         }
         const data = await res.json()
+        // Set merchant profile
         setMerchant(data.merchant)
         
         // Fetch stats + list of payments
