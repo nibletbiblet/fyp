@@ -69,7 +69,7 @@ export default function CtaFooter() {
                   EARLY ACCESS INCLUDES
                 </div>
                 {[
-                  'Testnet & Mainnet access',
+                  'Testnet sandbox access',
                   'Dedicated validator slot',
                   'Direct engineering support',
                   'Reduced protocol fees (90 days)',

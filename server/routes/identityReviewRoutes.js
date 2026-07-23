@@ -1,4 +1,5 @@
 import { Router } from 'express'
+import { authenticateAdminOrMerchant } from '../middleware/auth.js'
 import {
   getPaymentKyc,
   listDeclinedReasons,
@@ -22,7 +23,7 @@ function handleKycError(err, res) {
   return res.status(500).json({ error: 'Internal server error during identity review processing' })
 }
 
-router.get('/cases', async (_req, res) => {
+router.get('/cases', authenticateAdminOrMerchant, async (_req, res) => {
   try {
     res.json({ cases: await listKycCases() })
   } catch (err) {
@@ -30,7 +31,7 @@ router.get('/cases', async (_req, res) => {
   }
 })
 
-router.get('/declined-reasons', async (_req, res) => {
+router.get('/declined-reasons', authenticateAdminOrMerchant, async (_req, res) => {
   try {
     res.json({ reasons: await listDeclinedReasons() })
   } catch (err) {
@@ -70,7 +71,7 @@ router.post('/payments/:paymentId/singpass', async (req, res) => {
   }
 })
 
-router.post('/payments/:paymentId/review', async (req, res) => {
+router.post('/payments/:paymentId/review', authenticateAdminOrMerchant, async (req, res) => {
   try {
     res.json({ kyc: await reviewPoi(req.params.paymentId, req.body) })
   } catch (err) {

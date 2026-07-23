@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ChainForge Admin Dashboard</title>
+    <link rel="stylesheet" href="/admin-dashboard.css" />
+  </head>
+  <body>
+    <main class="admin-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-mark">CF</div>
+          <div>
+            <h1>ChainForge</h1>
+            <p>Platform Admin</p>
+          </div>
+        </div>
+
+        <nav class="nav-list" aria-label="Admin sections">
+          <a class="nav-item active" href="#overview" data-section="overview">Overview</a>
+          <a class="nav-item" href="#payments" data-section="payments">Payments</a>
+          <a class="nav-item" href="#conversions" data-section="conversions">Conversions</a>
+          <a class="nav-item" href="#settlements" data-section="settlements">Settlements</a>
+          <a class="nav-item" href="#payouts" data-section="payouts">Merchant Payouts</a>
+          <a class="nav-item" href="#merchants" data-section="merchants">Merchants</a>
+          <a class="nav-item" href="#risk" data-section="risk">Risk & Compliance</a>
+          <a class="nav-item" href="#activity" data-section="activity">System Activity</a>
+        </nav>
+
+        <div class="sidebar-footer">
+          <a href="/dashboard">Merchant Dashboard</a>
+          <a href="/admin-identity-review.html">Identity Review</a>
+        </div>
+      </aside>
+
+      <section class="workspace">
+        <header class="topbar">
+          <div>
+            <span class="eyebrow">Admin Overview</span>
+            <h2>Platform Operations</h2>
+            <p id="statusText">Loading admin dashboard...</p>
+          </div>
+          <button id="refreshBtn" type="button">Refresh</button>
+        </header>
+
+        <section id="pageContent"></section>
+      </section>
+    </main>
+    <script src="/admin-dashboard.js"></script>
+  </body>
+</html>

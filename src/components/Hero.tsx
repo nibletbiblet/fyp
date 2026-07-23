@@ -52,9 +52,9 @@ export default function Hero() {
               className="hidden sm:flex items-center gap-2 text-xs"
               style={{ color: 'var(--text-muted)', fontFamily: 'Space Mono, monospace' }}
             >
-              <span>NETWORK: MAINNET</span>
+              <span>NETWORK: SEPOLIA TESTNET</span>
               <span className="opacity-30">|</span>
-              <span>CHAIN ID: 1</span>
+              <span>CHAIN ID: 11155111</span>
             </div>
           </div>
         </FadeUp>

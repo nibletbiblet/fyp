@@ -79,7 +79,7 @@ export default function Navbar() {
               ChainForge
             </span>
             <span className="mono text-[9px]" style={{ color: 'var(--amber)' }}>
-              MAINNET LIVE
+              TESTNET DEMO
             </span>
           </div>
         </div>
@@ -124,13 +124,6 @@ export default function Navbar() {
           >
             Register
           </Link>
-          <a
-            href="/admin-identity-review.html"
-            id="nav-demo"
-            className="btn-ghost text-[11px] py-2 px-5"
-          >
-            Identity Review
-          </a>
           {/* Mobile toggle */}
           <button
             className="md:hidden text-white/60 hover:text-white"
@@ -192,9 +185,6 @@ export default function Navbar() {
               <Link to="/register" className="btn-primary justify-center" onClick={() => setMobileOpen(false)}>
                 Register
               </Link>
-              <a href="/admin-identity-review.html" className="btn-ghost mt-2 justify-center" onClick={() => setMobileOpen(false)}>
-                Identity Review
-              </a>
             </div>
           </motion.div>
         )}

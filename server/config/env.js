@@ -55,6 +55,12 @@ export const env = {
     ethSgdRate: Number.parseFloat(process.env.MOCK_ETH_SGD_RATE ?? '4500'),
     stablecoinSgdRate: Number.parseFloat(process.env.MOCK_STABLECOIN_SGD_RATE ?? '1.35'),
   },
+  settlementJobSecret: process.env.SETTLEMENT_JOB_SECRET ?? '',
+  admin: {
+    email: process.env.ADMIN_EMAIL ?? 'admin@chainforge.local',
+    password: process.env.ADMIN_PASSWORD ?? (process.env.NODE_ENV === 'production' ? '' : 'Admin@123456'),
+    fullName: process.env.ADMIN_FULL_NAME ?? 'Platform Admin',
+  },
   jwtSecret: required('JWT_SECRET'),
   encryptionKey: requiredHex('ENCRYPTION_KEY', 32),
 }

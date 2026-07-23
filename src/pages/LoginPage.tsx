@@ -9,6 +9,9 @@ export default function LoginPage() {
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const backendOrigin = window.location.port === '5173'
+    ? `${window.location.protocol}//${window.location.hostname}:4000`
+    : window.location.origin
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -16,20 +19,38 @@ export default function LoginPage() {
     setError('')
 
     try {
-      const res = await fetch('/api/auth/login', {
+      const merchantRes = await fetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
         body: JSON.stringify({ email, password }),
       })
-      const data = await res.json()
+      const merchantData = await merchantRes.json()
 
-      if (!res.ok) {
-        setError(data.error || 'Login failed')
+      if (merchantRes.ok) {
+        navigate('/dashboard')
         return
       }
 
-      navigate('/dashboard')
+      if (merchantRes.status !== 401) {
+        setError(merchantData.error || 'Login failed')
+        return
+      }
+
+      const adminRes = await fetch('/api/admin-auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ email, password }),
+      })
+      const adminData = await adminRes.json()
+
+      if (!adminRes.ok) {
+        setError(adminData.error || merchantData.error || 'Invalid email or password')
+        return
+      }
+
+      window.location.href = `${backendOrigin}/admin-dashboard.html`
     } catch {
       setError('Network error — is the backend running?')
     } finally {
@@ -43,7 +64,7 @@ export default function LoginPage() {
         <div className="onboarding-card-header">
           <div className="onboarding-card-icon">🔐</div>
           <h1>Secure Gateway Entry</h1>
-          <p>Enter your corporate credentials to access the merchant workspace.</p>
+          <p>Enter your credentials to access the correct dashboard.</p>
         </div>
 
         <form onSubmit={handleLogin}>
