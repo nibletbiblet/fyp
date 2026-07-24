@@ -16,16 +16,27 @@ interface SupportedAsset {
 }
 
 interface PaymentInstructions {
+  walletUri?: string
+  qrImageDataUrl?: string
   qrCodeImageDataUrl?: string
   qrCodeData?: string
   walletPaymentQrCodeData?: string
   eip681PaymentUri?: string | null
+  erc20TransferUri?: string | null
   receivingAddress?: string
   expectedCryptoAmount?: string
+  expectedAmount?: string
   quoteExpiresAt?: string
+  quoteExpiry?: string
+  quoteSource?: string
+  quoteProvider?: string
+  quoteFetchedAt?: string
+  fallbackReason?: string | null
   tokenSymbol?: string | null
   contractAddress?: string | null
   chainId?: number | null
+  testnetWarning?: string
+  walletCompatibilityNote?: string
   warning?: string
 }
 
@@ -84,6 +95,10 @@ function statusColor(status: string) {
   if (status === 'SETTLED') return '#22c55e'
   if (status === 'EXPIRED' || status === 'FAILED') return '#ef4444'
   return '#f5f5f0'
+}
+
+function isFinalPaymentStatus(status: string | null | undefined) {
+  return ['SETTLED', 'PAID_OUT', 'CONFIRMED', 'CONVERTED_TO_SGD', 'FAILED'].includes(status || '')
 }
 
 export default function CheckoutPage() {
@@ -157,6 +172,7 @@ export default function CheckoutPage() {
   useEffect(() => {
     const status = checkout?.payment.status
     if (!paymentId || !checkout?.payment.supported_asset_id || !checkout.payment.receiving_address) return
+    if (checkout.payment.supported_asset_id !== 'asset-eth-sepolia') return
     if (['SETTLED', 'PAID_OUT', 'EXPIRED', 'FAILED'].includes(status || '')) return
 
     detectPayment()
@@ -271,15 +287,24 @@ export default function CheckoutPage() {
 
   const { payment, supportedAssets } = checkout
   const instructions = parseInstructions(payment.payment_instructions)
-  const qrPayload = instructions.eip681PaymentUri
+  const qrPayload = instructions.walletUri
+    || instructions.eip681PaymentUri
+    || instructions.erc20TransferUri
     || instructions.walletPaymentQrCodeData
     || payment.qr_code_data
     || instructions.qrCodeData
     || ''
+  const qrImageDataUrl = instructions.qrImageDataUrl || instructions.qrCodeImageDataUrl
   const selectedAsset = supportedAssets.find((asset) => asset.supported_asset_id === payment.supported_asset_id)
   const hasPaymentInstructions = Boolean(payment.supported_asset_id && payment.receiving_address)
-  const canSubmitSepoliaTx = payment.network_snapshot === 'ETH_SEPOLIA' && ['AWAITING_PAYMENT', 'CONFIRMING', 'UNDERPAID'].includes(payment.status)
-  const visibleAssets = supportedAssets.filter((asset) => asset.supported_asset_id === 'asset-eth-sepolia')
+  const isEthSepoliaPayment = payment.supported_asset_id === 'asset-eth-sepolia' || (
+    String(payment.crypto_symbol_snapshot || '').toUpperCase() === 'ETH'
+    && String(payment.network_snapshot || '').toUpperCase().includes('SEPOLIA')
+  )
+  const canSubmitSepoliaTx = isEthSepoliaPayment && ['AWAITING_PAYMENT', 'CONFIRMING', 'UNDERPAID'].includes(payment.status)
+  const visibleAssets = supportedAssets
+  const canRefreshQuote = Boolean(payment.supported_asset_id && !isFinalPaymentStatus(payment.status))
+  const expectedAmount = String(payment.expected_crypto_amount || instructions.expectedCryptoAmount || instructions.expectedAmount || '')
 
   return (
     <OnboardingLayout showSteps={false}>
@@ -337,7 +362,7 @@ export default function CheckoutPage() {
           <div className="dashboard-table-wrap" style={{ marginBottom: 24 }}>
             <div className="dashboard-table-header">
               <h3>Select testnet crypto</h3>
-              <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.35)' }}>Sepolia ETH only for this MVP</span>
+              <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.35)' }}>Quotes are locked from live SGD rates</span>
             </div>
             <div style={{ display: 'grid', gap: 12 }}>
               {visibleAssets.map((asset) => (
@@ -384,9 +409,9 @@ export default function CheckoutPage() {
 
             <div style={{ display: 'grid', gridTemplateColumns: 'minmax(180px, 240px) 1fr', gap: 24, alignItems: 'start' }}>
               <div style={{ textAlign: 'center' }}>
-                {instructions.qrCodeImageDataUrl ? (
+                {qrImageDataUrl ? (
                   <img
-                    src={instructions.qrCodeImageDataUrl}
+                    src={qrImageDataUrl}
                     alt="Payment QR code"
                     style={{ width: '100%', maxWidth: 240, background: '#fff', borderRadius: 10, padding: 8 }}
                   />
@@ -394,17 +419,29 @@ export default function CheckoutPage() {
                   <div style={{ width: 220, height: 220, background: '#fff', borderRadius: 10, margin: '0 auto' }} />
                 )}
                 <p style={{ fontSize: 11, color: 'rgba(255,255,255,0.4)', marginTop: 10 }}>
-                  Scan with MetaMask on Ethereum Sepolia.
+                  Scan with a compatible testnet wallet.
                 </p>
                 {qrPayload && (
-                  <button
-                    type="button"
-                    className="btn-onboarding-back"
-                    style={{ marginTop: 8, padding: '6px 10px', fontSize: 11 }}
-                    onClick={() => navigator.clipboard.writeText(qrPayload)}
-                  >
-                    Copy QR URI
-                  </button>
+                  <div style={{ display: 'flex', gap: 8, justifyContent: 'center', flexWrap: 'wrap', marginTop: 8 }}>
+                    <button
+                      type="button"
+                      className="btn-onboarding-back"
+                      style={{ padding: '6px 10px', fontSize: 11 }}
+                      onClick={() => navigator.clipboard.writeText(qrPayload)}
+                    >
+                      Copy QR URI
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-onboarding-primary"
+                      style={{ padding: '6px 10px', fontSize: 11 }}
+                      onClick={() => {
+                        window.location.href = qrPayload
+                      }}
+                    >
+                      Open in Wallet
+                    </button>
+                  </div>
                 )}
               </div>
 
@@ -412,8 +449,20 @@ export default function CheckoutPage() {
                 <div style={{ display: 'grid', gap: 14 }}>
                   <div>
                     <div className="infra-card-label">Expected Crypto Amount</div>
-                    <div style={{ color: '#f0a500', fontFamily: 'Space Mono, monospace', fontSize: 20, fontWeight: 700 }}>
-                      {Number(payment.expected_crypto_amount).toFixed(6)} {payment.crypto_symbol_snapshot}
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                      <div style={{ color: '#f0a500', fontFamily: 'Space Mono, monospace', fontSize: 20, fontWeight: 700 }}>
+                        {Number(expectedAmount).toFixed(selectedAsset?.decimals === 6 ? 6 : Math.min(selectedAsset?.decimals || 8, 8))} {payment.crypto_symbol_snapshot}
+                      </div>
+                      {expectedAmount && (
+                        <button
+                          type="button"
+                          className="btn-onboarding-back"
+                          style={{ padding: '6px 10px', fontSize: 11 }}
+                          onClick={() => navigator.clipboard.writeText(expectedAmount)}
+                        >
+                          Copy Amount
+                        </button>
+                      )}
                     </div>
                   </div>
                   <div>
@@ -449,39 +498,70 @@ export default function CheckoutPage() {
                     <div>1 {payment.crypto_symbol_snapshot} = S$ {Number(payment.quoted_rate_sgd_per_crypto).toFixed(2)}</div>
                   </div>
                   <div>
+                    <div className="infra-card-label">Quote Source</div>
+                    <div>
+                      {instructions.quoteSource || 'N/A'}
+                      {instructions.quoteProvider ? ` (${instructions.quoteProvider})` : ''}
+                    </div>
+                  </div>
+                  <div>
                     <div className="infra-card-label">Quote Expires</div>
                     <div>{formatDateTime(payment.quote_expires_at)}</div>
                   </div>
+                  {canRefreshQuote && (
+                    <button
+                      type="button"
+                      className="btn-onboarding-back"
+                      disabled={Boolean(selectingAssetId)}
+                      onClick={() => handleSelectAsset(payment.supported_asset_id || '')}
+                      style={{ width: '100%', justifyContent: 'center' }}
+                    >
+                      {selectingAssetId ? 'Refreshing Quote...' : payment.status === 'EXPIRED' ? 'Regenerate Quote' : 'Refresh Locked Quote'}
+                    </button>
+                  )}
                 </div>
               </div>
             </div>
 
             <div style={{ marginTop: 24, padding: 12, border: '1px dashed rgba(240,165,0,0.25)', borderRadius: 8, color: 'rgba(255,255,255,0.55)', fontSize: 12, lineHeight: 1.6 }}>
-              Use Ethereum Sepolia testnet only. Send from MetaMask and this page will scan Sepolia every 10 seconds for a matching payment.
-              This MVP matches one shared wallet by address, amount, and time window; production should use unique payment addresses, provider webhooks, or stronger unique amount matching.
+              {instructions.testnetWarning || instructions.warning || 'Use testnet funds only and send on the selected network.'}
+              {' '}
+              {instructions.walletCompatibilityNote || 'Wallets may still allow amount edits; backend verification enforces the locked amount.'}
+              {' '}
+              {isEthSepoliaPayment
+                ? 'This page scans Sepolia every 10 seconds for a matching payment.'
+                : 'Auto-detection is currently implemented only for ETH Sepolia; use the wallet URI and copy fields for this testnet asset.'}
+              {' '}
+              This MVP may use a shared receiving wallet; production should use unique payment addresses, provider webhooks, or stronger unique amount matching.
             </div>
 
-            <div
-              style={{
-                marginTop: 16,
-                padding: 12,
-                borderRadius: 8,
-                border: detectionMessage.includes('confirmed') || payment.status === 'SETTLED' ? '1px solid #22c55e' : '1px solid rgba(240,165,0,0.35)',
-                color: detectionMessage.includes('confirmed') || payment.status === 'SETTLED' ? '#22c55e' : '#f0a500',
-                background: detectionMessage.includes('confirmed') || payment.status === 'SETTLED' ? 'rgba(34,197,94,0.06)' : 'rgba(240,165,0,0.06)',
-                fontSize: 12,
-                lineHeight: 1.5,
-              }}
-            >
-              <strong>{detectingPayment ? 'Scanning Sepolia...' : detectionMessage || 'Waiting for Sepolia payment...'}</strong>
-              {detectedTransaction?.txHash && (
-                <div style={{ marginTop: 8, color: 'rgba(255,255,255,0.72)' }}>
-                  <div>Tx: <code style={{ color: '#f5f5f0', wordBreak: 'break-all' }}>{detectedTransaction.txHash}</code></div>
-                  {detectedTransaction.amountEth && <div>Received: {Number(detectedTransaction.amountEth).toFixed(6)} ETH</div>}
-                  {detectedTransaction.confirmations !== undefined && <div>Confirmations: {detectedTransaction.confirmations}</div>}
-                </div>
-              )}
-            </div>
+            {isEthSepoliaPayment ? (
+              <div
+                style={{
+                  marginTop: 16,
+                  padding: 12,
+                  borderRadius: 8,
+                  border: detectionMessage.includes('confirmed') || payment.status === 'SETTLED' ? '1px solid #22c55e' : '1px solid rgba(240,165,0,0.35)',
+                  color: detectionMessage.includes('confirmed') || payment.status === 'SETTLED' ? '#22c55e' : '#f0a500',
+                  background: detectionMessage.includes('confirmed') || payment.status === 'SETTLED' ? 'rgba(34,197,94,0.06)' : 'rgba(240,165,0,0.06)',
+                  fontSize: 12,
+                  lineHeight: 1.5,
+                }}
+              >
+                <strong>{detectingPayment ? 'Scanning Sepolia...' : detectionMessage || 'Waiting for Sepolia payment...'}</strong>
+                {detectedTransaction?.txHash && (
+                  <div style={{ marginTop: 8, color: 'rgba(255,255,255,0.72)' }}>
+                    <div>Tx: <code style={{ color: '#f5f5f0', wordBreak: 'break-all' }}>{detectedTransaction.txHash}</code></div>
+                    {detectedTransaction.amountEth && <div>Received: {Number(detectedTransaction.amountEth).toFixed(6)} ETH</div>}
+                    {detectedTransaction.confirmations !== undefined && <div>Confirmations: {detectedTransaction.confirmations}</div>}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div style={{ marginTop: 16, padding: 12, borderRadius: 8, border: '1px solid rgba(255,255,255,0.08)', color: 'rgba(255,255,255,0.55)', background: 'rgba(255,255,255,0.03)', fontSize: 12, lineHeight: 1.5 }}>
+                Auto-detection is not enabled for {payment.crypto_symbol_snapshot} in this MVP. Use the wallet URI and copy fields, then verify records manually if needed.
+              </div>
+            )}
 
             {canSubmitSepoliaTx && (
               <form onSubmit={handleSubmitTransaction} style={{ marginTop: 18 }}>

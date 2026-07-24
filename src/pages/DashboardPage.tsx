@@ -67,6 +67,8 @@ interface ToastNotification {
 }
 
 interface PaymentInstructions {
+  walletUri?: string
+  qrImageDataUrl?: string
   qrCodeImageDataUrl?: string
   qrCodeData?: string
   walletPaymentQrCodeData?: string
@@ -631,7 +633,8 @@ export default function DashboardPage() {
   const isOnboarded = merchant?.status === 'ACTIVE_ONBOARDED'
   const successRate = stats.totalCount > 0 ? Math.round((stats.settledCount / stats.totalCount) * 100) : 0
   const createdInstructions = createdPayment ? parsePaymentInstructions(createdPayment.payment_instructions) : {}
-  const createdQrPayload = createdInstructions.eip681PaymentUri
+  const createdQrPayload = createdInstructions.walletUri
+    || createdInstructions.eip681PaymentUri
     || createdInstructions.walletPaymentQrCodeData
     || createdInstructions.qrCodeData
     || ''
@@ -1017,10 +1020,10 @@ export default function DashboardPage() {
                         }}
                       >
                         <td style={{ fontFamily: 'Space Mono, monospace', fontSize: 12 }}>
-                          {p.payment_reference}
+                          {p.merchant_order_reference || p.payment_reference}
                         </td>
                         <td style={{ color: 'rgba(255,255,255,0.6)' }}>
-                          {p.merchant_order_reference || p.description || 'N/A'}
+                          {p.description || 'N/A'}
                         </td>
                         <td>
                           {p.crypto_symbol_snapshot ? (
@@ -1272,10 +1275,10 @@ export default function DashboardPage() {
                   </div>
                 )}
 
-                {createdInstructions.qrCodeImageDataUrl && (
+                {(createdInstructions.qrImageDataUrl || createdInstructions.qrCodeImageDataUrl) && (
                   <div style={{ textAlign: 'center', marginBottom: 20 }}>
                     <img
-                      src={createdInstructions.qrCodeImageDataUrl}
+                      src={createdInstructions.qrImageDataUrl || createdInstructions.qrCodeImageDataUrl}
                       alt="Sepolia ETH payment QR code"
                       style={{ width: 220, height: 220, background: '#fff', borderRadius: 10, padding: 8 }}
                     />
@@ -1304,6 +1307,16 @@ export default function DashboardPage() {
                             onClick={() => navigator.clipboard.writeText(createdQrPayload)}
                           >
                             Copy
+                          </button>
+                          <button
+                            type="button"
+                            className="btn-onboarding-primary"
+                            style={{ padding: '6px 10px', fontSize: 11 }}
+                            onClick={() => {
+                              window.location.href = createdQrPayload
+                            }}
+                          >
+                            Open
                           </button>
                         </div>
                       </div>

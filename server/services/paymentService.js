@@ -1,8 +1,9 @@
 import crypto from 'node:crypto'
 import QRCode from 'qrcode'
+import { isAddress, parseUnits } from 'ethers'
 import { env } from '../config/env.js'
 import pool from '../config/db.js'
-import { fetchEthSgdQuote } from './paymentProviders/coingeckoQuoteProvider.js'
+import { fetchAssetSgdQuote } from './paymentProviders/coingeckoQuoteProvider.js'
 import {
   getCurrentSepoliaBlockNumber,
   scanSepoliaEthPayment,
@@ -14,15 +15,10 @@ import { calculateFees } from './paymentProviders/mockConversionProvider.js'
 const PAYMENT_REQUEST_TTL_MS = 24 * 60 * 60 * 1000
 const ETH_SEPOLIA_ASSET_ID = 'asset-eth-sepolia'
 
-const assetRateById = {
-  'asset-btc-testnet': env.mockPayments.btcSgdRate,
-  'asset-stablecoin-sepolia': env.mockPayments.stablecoinSgdRate,
-}
-
 const addressByNetwork = {
-  BTC_TESTNET: env.mockPayments.btcTestnetReceivingAddress,
-  ETH_SEPOLIA: env.sepolia.merchantReceivingAddress,
-  STABLECOIN_SEPOLIA: env.mockPayments.stablecoinSepoliaReceivingAddress,
+  BTC_TESTNET: env.receivingAddresses.btcTestnet,
+  ETH_SEPOLIA: env.receivingAddresses.ethSepolia,
+  STABLECOIN_SEPOLIA: env.receivingAddresses.stablecoinSepolia,
 }
 
 const toMysqlTimestamp = (date) => date.toISOString().slice(0, 19).replace('T', ' ')
@@ -35,24 +31,14 @@ const roundCryptoAmount = (amount, decimals) => {
 }
 
 const getQuoteForAsset = async (asset) => {
-  if (asset.supported_asset_id === ETH_SEPOLIA_ASSET_ID) {
-    const quote = await fetchEthSgdQuote()
-    return {
-      quotedRate: quote.rateSgdPerEth,
-      quoteProvider: quote.provider,
-      quoteFetchedAt: quote.fetchedAt,
-    }
-  }
-
-  const quotedRate = assetRateById[asset.supported_asset_id]
-  if (!quotedRate || quotedRate <= 0) {
-    throw Object.assign(new Error(`Mock quote rate is not configured for ${asset.supported_asset_id}`), { code: 'QUOTE_RATE_NOT_CONFIGURED' })
-  }
-
+  const quote = await fetchAssetSgdQuote(asset)
   return {
-    quotedRate,
-    quoteProvider: 'Mock static rate',
-    quoteFetchedAt: new Date().toISOString(),
+    quotedRate: quote.quotedRate,
+    quoteProvider: quote.quoteProvider,
+    quoteSource: quote.quoteSource,
+    quoteFetchedAt: quote.quoteFetchedAt,
+    coinGeckoId: quote.coinGeckoId,
+    fallbackReason: quote.fallbackReason,
   }
 }
 
@@ -69,30 +55,58 @@ const buildMerchantOrderReference = () => {
 
 const isDuplicateKeyError = (err) => err?.code === 'ER_DUP_ENTRY' || err?.errno === 1062
 
+const isEthSepoliaPayment = (payment) => {
+  const cryptoSymbol = String(payment.crypto_symbol_snapshot || payment.crypto_symbol || '').toUpperCase()
+  const network = String(payment.network_snapshot || payment.network || '').toUpperCase()
+  return payment.supported_asset_id === ETH_SEPOLIA_ASSET_ID || (cryptoSymbol === 'ETH' && network.includes('SEPOLIA'))
+}
+
 const buildSepoliaEthPaymentUri = ({ receivingAddress, expectedCryptoAmount }) => {
   const cleanAddress = String(receivingAddress || '').trim()
   const weiValue = toWeiString(String(expectedCryptoAmount).trim())
   return `ethereum:${cleanAddress}@11155111?value=${weiValue}`
 }
 
+const buildStablecoinTransferUri = ({ asset, receivingAddress, expectedCryptoAmount }) => {
+  const cleanContractAddress = String(asset.contract_address || '').trim()
+  const cleanReceivingAddress = String(receivingAddress || '').trim()
+  const smallestUnitValue = parseUnits(String(expectedCryptoAmount).trim(), Number(asset.decimals || 6)).toString()
+  return `ethereum:${cleanContractAddress}@11155111/transfer?address=${cleanReceivingAddress}&uint256=${smallestUnitValue}`
+}
+
+const isValidBtcTestnetAddress = (address) => /^(tb1|m|n|2)[a-zA-Z0-9]{20,}$/.test(String(address || '').trim())
+
+const validatePaymentAddress = (asset, receivingAddress) => {
+  if (asset.network === 'BTC_TESTNET') {
+    return isValidBtcTestnetAddress(receivingAddress)
+  }
+
+  if (asset.network === 'ETH_SEPOLIA') {
+    return isAddress(String(receivingAddress || '').trim())
+  }
+
+  if (asset.network === 'STABLECOIN_SEPOLIA') {
+    return isAddress(String(receivingAddress || '').trim()) && isAddress(String(asset.contract_address || '').trim())
+  }
+
+  return false
+}
+
 const buildWalletPaymentPayload = ({ asset, payment, expectedCryptoAmount, receivingAddress }) => {
   if (asset.network === 'BTC_TESTNET') {
-    return `bitcoin:${receivingAddress}?amount=${expectedCryptoAmount}&label=ChainForge&message=${payment.payment_reference}`
+    return `bitcoin:${receivingAddress}?amount=${expectedCryptoAmount}&message=${payment.payment_id}`
   }
 
   if (asset.network === 'ETH_SEPOLIA') {
     return buildSepoliaEthPaymentUri({ receivingAddress, expectedCryptoAmount })
   }
 
-  return JSON.stringify({
-    token: asset.token_symbol,
-    cryptoSymbol: asset.crypto_symbol,
-    network: asset.network,
-    chainId: asset.chain_id,
-    contractAddress: asset.contract_address,
-    recipient: receivingAddress,
-    amount: expectedCryptoAmount,
-    paymentReference: payment.payment_reference,
+  if (asset.network === 'STABLECOIN_SEPOLIA') {
+    return buildStablecoinTransferUri({ asset, receivingAddress, expectedCryptoAmount })
+  }
+
+  throw Object.assign(new Error(`No wallet URI builder is configured for ${asset.network}`), {
+    code: 'UNSUPPORTED_PAYMENT_ASSET',
   })
 }
 
@@ -256,7 +270,7 @@ export async function selectAsset(paymentId, supportedAssetId) {
     }
 
     const payment = payments[0]
-    if (!['CREATED', 'AWAITING_CRYPTO_SELECTION', 'QR_GENERATED', 'AWAITING_PAYMENT'].includes(payment.status)) {
+    if (!['CREATED', 'AWAITING_CRYPTO_SELECTION', 'QR_GENERATED', 'AWAITING_PAYMENT', 'EXPIRED'].includes(payment.status)) {
       throw Object.assign(new Error(`Payment cannot select asset from status ${payment.status}`), { code: 'INVALID_PAYMENT_STATUS' })
     }
 
@@ -272,13 +286,23 @@ export async function selectAsset(paymentId, supportedAssetId) {
     }
 
     const asset = assets[0]
-    const { quotedRate, quoteProvider, quoteFetchedAt } = await getQuoteForAsset(asset)
+    const {
+      quotedRate,
+      quoteProvider,
+      quoteSource,
+      quoteFetchedAt,
+      coinGeckoId,
+      fallbackReason,
+    } = await getQuoteForAsset(asset)
 
     const expectedCryptoAmount = roundCryptoAmount(Number(payment.amount_sgd) / quotedRate, asset.decimals)
     const quoteExpiresAt = buildQuoteExpiry()
     const receivingAddress = addressByNetwork[asset.network]
     if (!receivingAddress) {
-      throw Object.assign(new Error(`Mock receiving address is not configured for ${asset.network}`), { code: 'RECEIVING_ADDRESS_NOT_CONFIGURED' })
+      throw Object.assign(new Error(`Receiving address is not configured for ${asset.network}`), { code: 'RECEIVING_ADDRESS_NOT_CONFIGURED' })
+    }
+    if (!validatePaymentAddress(asset, receivingAddress)) {
+      throw Object.assign(new Error(`Receiving address or token contract is invalid for ${asset.network}`), { code: 'RECEIVING_ADDRESS_INVALID' })
     }
 
     const checkoutQrCodeData = buildAbsoluteCheckoutUrl(paymentId)
@@ -295,6 +319,8 @@ export async function selectAsset(paymentId, supportedAssetId) {
     const qrCodeImageDataUrl = await QRCode.toDataURL(qrCodeData, { margin: 1, width: 240 })
     const checkoutQrCodeImageDataUrl = await QRCode.toDataURL(checkoutQrCodeData, { margin: 1, width: 240 })
     const paymentInstructions = {
+      walletUri: walletPaymentQrCodeData,
+      qrImageDataUrl: qrCodeImageDataUrl,
       qrCodeImageDataUrl,
       qrCodeData,
       checkoutUrl: buildCheckoutUrl(paymentId),
@@ -302,11 +328,14 @@ export async function selectAsset(paymentId, supportedAssetId) {
       checkoutQrCodeImageDataUrl,
       walletPaymentQrCodeData,
       eip681PaymentUri: asset.supported_asset_id === ETH_SEPOLIA_ASSET_ID ? walletPaymentQrCodeData : null,
+      erc20TransferUri: asset.asset_type === 'ERC20' ? walletPaymentQrCodeData : null,
       walletPaymentQrCodeImageDataUrl: qrCodeImageDataUrl,
       sepoliaCreatedBlockNumber,
       receivingAddress,
       expectedCryptoAmount,
+      expectedAmount: expectedCryptoAmount,
       quoteExpiresAt: quoteExpiresAt.toISOString(),
+      quoteExpiry: quoteExpiresAt.toISOString(),
       supportedAssetId: asset.supported_asset_id,
       cryptoSymbol: asset.crypto_symbol,
       network: asset.network,
@@ -316,10 +345,37 @@ export async function selectAsset(paymentId, supportedAssetId) {
       chainId: asset.chain_id,
       minConfirmations: asset.min_confirmations,
       quoteProvider,
+      quoteSource,
       quoteFetchedAt,
+      coinGeckoId,
+      fallbackReason,
       tolerancePercent: env.paymentTolerancePercent,
+      testnetWarning: 'Use testnet funds only. Do not send mainnet BTC, ETH, or stablecoins.',
+      walletCompatibilityNote: asset.asset_type === 'ERC20'
+        ? 'Some wallets may not support ERC-20 transfer URIs. If the wallet does not prefill the token transfer, copy the recipient, token contract, and exact token amount manually.'
+        : 'Wallets may still allow the sender to edit the amount. The backend enforces the locked amount during verification.',
       warning: 'Use testnet funds only and send on the selected network.',
     }
+
+    await conn.query(
+      `INSERT INTO audit_logs (payment_id, merchant_id, actor_type, action, details, created_at)
+       VALUES (?, ?, 'SYSTEM', 'PAYMENT_QUOTE_GENERATED', ?, CURRENT_TIMESTAMP)`,
+      [
+        paymentId,
+        payment.merchant_id,
+        JSON.stringify({
+          supportedAssetId: asset.supported_asset_id,
+          cryptoSymbol: asset.crypto_symbol,
+          network: asset.network,
+          quotedRate,
+          quoteSource,
+          quoteProvider,
+          quoteExpiresAt: quoteExpiresAt.toISOString(),
+          coinGeckoId,
+          fallbackReason,
+        }),
+      ]
+    )
 
     await conn.query(
       `UPDATE payments
@@ -364,7 +420,10 @@ export async function selectAsset(paymentId, supportedAssetId) {
           quotedRate,
           quoteExpiresAt: quoteExpiresAt.toISOString(),
           quoteProvider,
+          quoteSource,
           quoteFetchedAt,
+          coinGeckoId,
+          fallbackReason,
           tolerancePercent: env.paymentTolerancePercent,
         }),
       ]
@@ -570,7 +629,7 @@ const createOrUpdateSimulatedSettlement = async (conn, payment) => {
 export async function submitSepoliaTransactionHash(paymentId, txHash) {
   const payment = await getPaymentForTxSubmission(paymentId)
 
-  if (payment.supported_asset_id !== ETH_SEPOLIA_ASSET_ID || payment.network !== 'ETH_SEPOLIA') {
+  if (!isEthSepoliaPayment(payment)) {
     throw Object.assign(new Error('Only ETH Sepolia payments support manual transaction verification in this flow'), {
       code: 'UNSUPPORTED_PAYMENT_ASSET',
     })
@@ -625,7 +684,7 @@ export async function submitSepoliaTransactionHash(paymentId, txHash) {
 
   const verification = await verifySepoliaEthTransaction({
     txHash: normalizedTxHash,
-    receivingAddress: env.sepolia.merchantReceivingAddress,
+    receivingAddress: payment.receiving_address,
     expectedEthAmount: payment.expected_crypto_amount,
     tolerancePercent: env.paymentTolerancePercent,
     minConfirmations: payment.min_confirmations,
@@ -912,7 +971,7 @@ export async function submitSepoliaTransactionHash(paymentId, txHash) {
 export async function detectSepoliaPayment(paymentId) {
   const payment = await getPaymentForTxSubmission(paymentId)
 
-  if (payment.supported_asset_id !== ETH_SEPOLIA_ASSET_ID || payment.network !== 'ETH_SEPOLIA') {
+  if (!isEthSepoliaPayment(payment)) {
     throw Object.assign(new Error('Only ETH Sepolia payments support auto detection in this flow'), {
       code: 'UNSUPPORTED_PAYMENT_ASSET',
     })
@@ -923,6 +982,20 @@ export async function detectSepoliaPayment(paymentId) {
       code: 'PAYMENT_NOT_READY',
     })
   }
+
+  console.log('[SepoliaDetect] payment_context', {
+    paymentId,
+    status: payment.status,
+    supportedAssetId: payment.supported_asset_id,
+    cryptoSymbol: payment.crypto_symbol_snapshot || payment.crypto_symbol,
+    network: payment.network_snapshot || payment.network,
+    expectedEthAmount: String(payment.expected_crypto_amount),
+    expectedWei: toWeiString(payment.expected_crypto_amount),
+    receivingAddress: payment.receiving_address,
+    quoteExpiresAt: payment.quote_expires_at,
+    expiresAt: payment.expires_at,
+    serverTimeUtc: new Date().toISOString(),
+  })
 
   if (['SETTLED', 'PAID_OUT'].includes(payment.status)) {
     return {
@@ -941,6 +1014,12 @@ export async function detectSepoliaPayment(paymentId) {
   }
 
   if (isPast(payment.expires_at) || isPast(payment.quote_expires_at)) {
+    console.log('[SepoliaDetect] payment_expired_before_scan', {
+      paymentId,
+      expiresAt: payment.expires_at,
+      quoteExpiresAt: payment.quote_expires_at,
+      serverTimeUtc: new Date().toISOString(),
+    })
     await pool.query(
       `UPDATE payments
        SET status = 'EXPIRED'
@@ -963,7 +1042,7 @@ export async function detectSepoliaPayment(paymentId) {
 
   const instructions = parsePaymentInstructions(payment.payment_instructions)
   const scanResult = await scanSepoliaEthPayment({
-    receivingAddress: env.sepolia.merchantReceivingAddress,
+    receivingAddress: payment.receiving_address,
     expectedEthAmount: payment.expected_crypto_amount,
     tolerancePercent: env.paymentTolerancePercent,
     minConfirmations: payment.min_confirmations,
@@ -972,12 +1051,25 @@ export async function detectSepoliaPayment(paymentId) {
   })
 
   if (scanResult.status !== 'FOUND') {
+    console.log('[SepoliaDetect] payment_not_detected', {
+      paymentId,
+      ...scanResult,
+    })
     return {
       status: 'NOT_DETECTED',
       paymentStatus: payment.status,
       ...scanResult,
     }
   }
+
+  console.log('[SepoliaDetect] payment_candidate_selected', {
+    paymentId,
+    txHash: scanResult.txHash,
+    amountEth: scanResult.amountEth,
+    confirmations: scanResult.confirmations,
+    isUnderpaid: scanResult.isUnderpaid,
+    isOverpaid: scanResult.isOverpaid,
+  })
 
   const verification = await submitSepoliaTransactionHash(paymentId, scanResult.txHash)
 

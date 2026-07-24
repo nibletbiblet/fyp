@@ -49,7 +49,9 @@ export async function createPaymentRequest(req, res) {
     }
     if (
       err.code === 'QUOTE_RATE_NOT_CONFIGURED' ||
-      err.code === 'RECEIVING_ADDRESS_NOT_CONFIGURED'
+      err.code === 'RECEIVING_ADDRESS_NOT_CONFIGURED' ||
+      err.code === 'RECEIVING_ADDRESS_INVALID' ||
+      err.code === 'ASSET_PRICE_NOT_CONFIGURED'
     ) {
       return res.status(400).json({ error: err.message })
     }
@@ -96,7 +98,9 @@ export async function selectPaymentAsset(req, res) {
     if (
       err.code === 'INVALID_PAYMENT_STATUS' ||
       err.code === 'QUOTE_RATE_NOT_CONFIGURED' ||
-      err.code === 'RECEIVING_ADDRESS_NOT_CONFIGURED'
+      err.code === 'RECEIVING_ADDRESS_NOT_CONFIGURED' ||
+      err.code === 'RECEIVING_ADDRESS_INVALID' ||
+      err.code === 'ASSET_PRICE_NOT_CONFIGURED'
     ) {
       return res.status(400).json({ error: err.message })
     }

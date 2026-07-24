@@ -3,7 +3,7 @@ import { env } from '../../config/env.js'
 
 const TX_HASH_PATTERN = /^0x[a-fA-F0-9]{64}$/
 const SEPOLIA_CHAIN_ID = 11155111n
-const MAX_SCAN_BLOCKS = 500
+const MAX_SCAN_BLOCKS = 5000
 
 const normalizeAddress = (address) => {
   if (!address || !isAddress(address)) return null
@@ -175,34 +175,89 @@ export async function scanSepoliaEthPayment({
 
   const provider = await getSepoliaProvider()
   const latestBlock = await provider.getBlockNumber()
-  const safeFromBlock = Math.max(0, Number(fromBlock || latestBlock - MAX_SCAN_BLOCKS))
-  const scanFromBlock = Math.max(0, Math.min(safeFromBlock, latestBlock) - 1)
+  const storedFromBlock = Number(fromBlock || 0)
   const scanToBlock = latestBlock
-  const boundedFromBlock = Math.max(scanFromBlock, scanToBlock - MAX_SCAN_BLOCKS)
+  const boundedFromBlock = Math.max(0, scanToBlock - MAX_SCAN_BLOCKS)
   const ignored = new Set(ignoredTxHashes.map((hash) => String(hash).toLowerCase()))
   const minimumWei = buildMinimumWei(expectedEthAmount, tolerancePercent)
+  const expectedWei = parseEther(String(expectedEthAmount))
+  let scannedTransactionCount = 0
+  let candidateCount = 0
+  let ignoredTransactionCount = 0
+
+  console.log('[SepoliaDetect] scan_start', {
+    receivingAddress: expectedRecipient,
+    expectedEthAmount: String(expectedEthAmount),
+    expectedWei: expectedWei.toString(),
+    minimumWei: minimumWei.toString(),
+    tolerancePercent,
+    minConfirmations,
+    storedFromBlock: Number.isFinite(storedFromBlock) && storedFromBlock > 0 ? storedFromBlock : null,
+    scannedFromBlock: boundedFromBlock,
+    latestBlock: scanToBlock,
+    maxScanBlocks: MAX_SCAN_BLOCKS,
+  })
 
   for (let blockNumber = scanToBlock; blockNumber >= boundedFromBlock; blockNumber -= 1) {
-    const block = await provider.getBlock(blockNumber)
+    const block = await provider.getBlock(blockNumber, true)
     if (!block) continue
 
-    for (const txHash of block.transactions) {
-      if (ignored.has(String(txHash).toLowerCase())) continue
+    const blockTransactions = Array.isArray(block.prefetchedTransactions)
+      ? block.prefetchedTransactions
+      : block.transactions
 
-      const tx = await provider.getTransaction(txHash)
+    scannedTransactionCount += blockTransactions.length
+
+    for (const txOrHash of blockTransactions) {
+      const txHash = typeof txOrHash === 'string' ? txOrHash : txOrHash.hash
+      if (ignored.has(String(txHash).toLowerCase())) {
+        ignoredTransactionCount += 1
+        continue
+      }
+
+      const tx = typeof txOrHash === 'string' ? await provider.getTransaction(txHash) : txOrHash
       if (!tx || !tx.to || normalizeAddress(tx.to) !== expectedRecipient) {
         continue
       }
 
+      candidateCount += 1
+      console.log('[SepoliaDetect] candidate_found', {
+        txHash,
+        blockNumber,
+        from: tx.from,
+        to: tx.to,
+        valueWei: tx.value?.toString(),
+        valueEth: formatEther(tx.value),
+      })
+
       const receipt = await provider.getTransactionReceipt(txHash)
       if (!receipt || receipt.status !== 1) {
+        console.log('[SepoliaDetect] candidate_rejected', {
+          txHash,
+          reason: !receipt ? 'NO_RECEIPT' : 'RECEIPT_STATUS_NOT_SUCCESS',
+          receiptStatus: receipt?.status ?? null,
+        })
         continue
       }
 
       const confirmations = Math.max(0, latestBlock - receipt.blockNumber + 1)
       if (confirmations < Number(minConfirmations || 1)) {
+        console.log('[SepoliaDetect] candidate_rejected', {
+          txHash,
+          reason: 'INSUFFICIENT_CONFIRMATIONS',
+          confirmations,
+          requiredConfirmations: Number(minConfirmations || 1),
+        })
         continue
       }
+
+      console.log('[SepoliaDetect] candidate_accepted', {
+        txHash,
+        confirmations,
+        blockNumber: receipt.blockNumber,
+        isUnderpaid: tx.value < minimumWei,
+        isOverpaid: tx.value > expectedWei,
+      })
 
       return {
         status: 'FOUND',
@@ -213,15 +268,30 @@ export async function scanSepoliaEthPayment({
         confirmations,
         blockNumber: receipt.blockNumber,
         isUnderpaid: tx.value < minimumWei,
+        isOverpaid: tx.value > expectedWei,
         requiredMinimumEth: formatEther(minimumWei),
+        scannedTransactionCount,
+        candidateCount,
+        ignoredTransactionCount,
         scannedFromBlock: boundedFromBlock,
         scannedToBlock: scanToBlock,
       }
     }
   }
 
+  console.log('[SepoliaDetect] scan_complete_not_found', {
+    scannedFromBlock: boundedFromBlock,
+    scannedToBlock: scanToBlock,
+    scannedTransactionCount,
+    candidateCount,
+    ignoredTransactionCount,
+  })
+
   return {
     status: 'NOT_FOUND',
+    scannedTransactionCount,
+    candidateCount,
+    ignoredTransactionCount,
     scannedFromBlock: boundedFromBlock,
     scannedToBlock: scanToBlock,
   }
