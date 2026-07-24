@@ -8,7 +8,7 @@ export default function VerifyEmailPage() {
   const token = searchParams.get('token')
  
   const [phase, setPhase] = useState<'loading' | 'success' | 'error'>('loading')
-  const [statusText, setStatusText] = useState('Authenticating token routing profiles and provisioning dedicated Triple-A ledger containers...')
+  const [statusText, setStatusText] = useState('Authenticating token routing profiles and provisioning dedicated settlement ledger containers...')
   const [containerId, setContainerId] = useState('')
   const [walletId, setWalletId] = useState('')
   const [errorMsg, setErrorMsg] = useState('')

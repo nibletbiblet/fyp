@@ -6,6 +6,7 @@ import VerifyEmailPage from './pages/VerifyEmailPage'
 import LoginPage from './pages/LoginPage'
 import DashboardPage from './pages/DashboardPage'
 import CheckoutPage from './pages/CheckoutPage'
+import StripeReturnPage from './pages/StripeReturnPage'
 
 function App() {
   return (
@@ -16,6 +17,8 @@ function App() {
       <Route path="/verify-email" element={<VerifyEmailPage />} />
       <Route path="/login" element={<LoginPage />} />
       <Route path="/dashboard" element={<DashboardPage />} />
+      <Route path="/merchant/stripe/return" element={<StripeReturnPage mode="return" />} />
+      <Route path="/merchant/stripe/refresh" element={<StripeReturnPage mode="refresh" />} />
       <Route path="/checkout/:paymentId" element={<CheckoutPage />} />
     </Routes>
   )

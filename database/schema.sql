@@ -36,6 +36,13 @@ CREATE TABLE `merchants` (
   `container_id` varchar(64) DEFAULT NULL,
   `wallet_id` varchar(64) DEFAULT NULL,
   `stripe_connected_account_id` varchar(128) DEFAULT NULL,
+  `stripe_onboarding_status` varchar(40) NOT NULL DEFAULT 'NOT_STARTED',
+  `stripe_details_submitted` tinyint(1) NOT NULL DEFAULT 0,
+  `stripe_payouts_enabled` tinyint(1) NOT NULL DEFAULT 0,
+  `stripe_charges_enabled` tinyint(1) NOT NULL DEFAULT 0,
+  `stripe_requirements_currently_due` json DEFAULT NULL,
+  `stripe_requirements_disabled_reason` varchar(255) DEFAULT NULL,
+  `stripe_status_synced_at` timestamp NULL DEFAULT NULL,
   `payout_enabled` tinyint(1) NOT NULL DEFAULT 1,
   `onboarded_at` timestamp NULL DEFAULT NULL,
   `kyc_status` enum('PENDING','APPROVED','REJECTED','MANUAL_REVIEW') NOT NULL DEFAULT 'PENDING',
@@ -63,6 +70,18 @@ CREATE TABLE `admin_users` (
   PRIMARY KEY (`admin_user_id`),
   UNIQUE KEY `uq_admin_users_email` (`email`),
   KEY `idx_admin_users_status` (`status`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE `merchant_fee_profiles` (
+  `merchant_id` varchar(36) NOT NULL,
+  `platform_fee_rate` decimal(8,6) NOT NULL DEFAULT '0.015000',
+  `maximum_total_rate` decimal(8,6) NOT NULL DEFAULT '0.030000',
+  `settlement_delay_days` int NOT NULL DEFAULT 1,
+  `settlement_currency` varchar(3) NOT NULL DEFAULT 'SGD',
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`merchant_id`),
+  CONSTRAINT `fk_merchant_fee_profiles_merchants` FOREIGN KEY (`merchant_id`) REFERENCES `merchants` (`merchant_id`) ON DELETE CASCADE ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE `supported_assets` (
@@ -103,7 +122,7 @@ CREATE TABLE `merchant_payouts` (
   `stripe_transfer_id` varchar(128) DEFAULT NULL,
   `stripe_payout_id` varchar(128) DEFAULT NULL,
   `idempotency_key` varchar(128) DEFAULT NULL,
-  `status` enum('NOT_READY','PENDING_APPROVAL','PROCESSING','PAID_OUT','FAILED','CANCELLED') NOT NULL DEFAULT 'NOT_READY',
+  `status` enum('NOT_READY','PENDING_APPROVAL','PROCESSING','TRANSFERRED','PAID_OUT','FAILED','CANCELLED') NOT NULL DEFAULT 'NOT_READY',
   `requested_at` timestamp NULL DEFAULT NULL,
   `processing_started_at` timestamp NULL DEFAULT NULL,
   `paid_out_at` timestamp NULL DEFAULT NULL,
@@ -263,11 +282,15 @@ CREATE TABLE `settlements` (
   `gross_sgd_amount` decimal(12,2) NOT NULL,
   `provider_fee_sgd` decimal(12,2) NOT NULL DEFAULT '0.00',
   `platform_fee_sgd` decimal(12,2) NOT NULL DEFAULT '0.00',
+  `conversion_cost_sgd` decimal(12,2) NOT NULL DEFAULT '0.00',
+  `network_fee_sgd` decimal(12,2) NOT NULL DEFAULT '0.00',
+  `buffer_reserved_sgd` decimal(12,2) NOT NULL DEFAULT '0.00',
+  `buffer_released_sgd` decimal(12,2) NOT NULL DEFAULT '0.00',
   `net_settlement_sgd_amount` decimal(12,2) NOT NULL,
   `conversion_rate` decimal(36,18) DEFAULT NULL,
   `provider_name` varchar(100) NOT NULL DEFAULT 'MOCK_MAS_LICENSED_PROVIDER',
   `provider_reference` varchar(128) DEFAULT NULL,
-  `status` enum('PENDING_CONVERSION','CONVERTED_TO_SGD','SETTLEMENT_PENDING','SETTLED','PAID_OUT','FAILED','MANUAL_REVIEW_REQUIRED') NOT NULL DEFAULT 'PENDING_CONVERSION',
+  `status` enum('PENDING_CONVERSION','CONVERTED_TO_SGD','ELIGIBLE','PROCESSING','TRANSFERRED','HELD','SETTLED','PAID_OUT','FAILED','MANUAL_REVIEW_REQUIRED') NOT NULL DEFAULT 'PENDING_CONVERSION',
   `converted_at` timestamp NULL DEFAULT NULL,
   `settled_at` timestamp NULL DEFAULT NULL,
   `paid_out_at` timestamp NULL DEFAULT NULL,
@@ -287,6 +310,30 @@ CREATE TABLE `settlements` (
   CONSTRAINT `chk_settlements_provider_fee_nonnegative` CHECK (`provider_fee_sgd` >= 0),
   CONSTRAINT `chk_settlements_platform_fee_nonnegative` CHECK (`platform_fee_sgd` >= 0),
   CONSTRAINT `chk_settlements_net_nonnegative` CHECK (`net_settlement_sgd_amount` >= 0)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE `settlement_batches` (
+  `id` bigint unsigned NOT NULL AUTO_INCREMENT,
+  `merchant_id` varchar(36) NOT NULL,
+  `settlement_date` date NOT NULL,
+  `gross_amount_cents` bigint NOT NULL,
+  `platform_fee_cents` bigint NOT NULL,
+  `conversion_cost_cents` bigint NOT NULL DEFAULT 0,
+  `network_fee_cents` bigint NOT NULL DEFAULT 0,
+  `buffer_reserved_cents` bigint NOT NULL DEFAULT 0,
+  `buffer_released_cents` bigint NOT NULL DEFAULT 0,
+  `absorbed_by_chainforge_cents` bigint NOT NULL DEFAULT 0,
+  `net_amount_cents` bigint NOT NULL,
+  `stripe_transfer_id` varchar(255) DEFAULT NULL,
+  `status` varchar(30) NOT NULL DEFAULT 'PENDING',
+  `failure_reason` text DEFAULT NULL,
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `completed_at` timestamp NULL DEFAULT NULL,
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_settlement_batches_merchant_date` (`merchant_id`, `settlement_date`),
+  KEY `idx_settlement_batches_status` (`status`),
+  CONSTRAINT `fk_settlement_batches_merchants` FOREIGN KEY (`merchant_id`) REFERENCES `merchants` (`merchant_id`) ON DELETE RESTRICT ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE `audit_logs` (

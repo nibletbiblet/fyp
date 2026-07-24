@@ -165,6 +165,34 @@ input {
   background: rgba(255, 255, 255, 0.06);
   color: var(--muted);
   padding: 0 10px;
+  cursor: pointer;
+}
+
+.mini-button:hover {
+  border-color: rgba(240, 165, 0, 0.35);
+  color: var(--amber);
+}
+
+.detail-header {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 18px;
+}
+
+.detail-header h3,
+.detail-header p {
+  margin: 0;
+}
+
+.detail-header p {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.summary-value.small {
+  font-size: 16px;
 }
 
 .summary-grid {

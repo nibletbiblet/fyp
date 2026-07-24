@@ -5,6 +5,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import jwt from 'jsonwebtoken'
 import { env } from './config/env.js'
+import stripe from './config/stripe.js'
 import pool from './config/db.js'
 import { authenticateAdminToken, authenticateToken } from './middleware/auth.js'
 import authRoutes from './routes/authRoutes.js'
@@ -12,14 +13,14 @@ import adminAuthRoutes from './routes/adminAuthRoutes.js'
 import paymentRoutes from './routes/paymentRoutes.js'
 import identityReviewRoutes from './routes/identityReviewRoutes.js'
 import riskRoutes from './routes/riskRoutes.js'
+import merchantStripeRoutes from './routes/merchantStripeRoutes.js'
 import { startSettlementWorker } from './services/settlementWorker.js'
 import { ensureKycSchema } from './services/identityReviewService.js'
 import { ensureMainSchema } from './services/schemaService.js'
 import { ensureRiskSchema } from './services/riskService.js'
 import {
-  createPayoutBatchesForPendingSettlements,
-  finalizeProcessingPayouts,
-  markConvertedSettlementsPending,
+  handleStripeWebhookEvent,
+  runDailyMerchantSettlements,
 } from './services/settlementService.js'
 
 export const app = express()
@@ -28,6 +29,22 @@ const identityReviewAssetDir = path.join(__dirname, 'admin-identity-review')
 const adminDashboardAssetDir = path.join(__dirname, 'admin-dashboard')
 
 app.use(cors({ origin: env.corsOrigin, credentials: true }))
+
+app.post('/api/stripe/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
+  try {
+    const signature = req.headers['stripe-signature']
+    const event = env.stripe.webhookSecret
+      ? stripe.webhooks.constructEvent(req.body, signature, env.stripe.webhookSecret)
+      : JSON.parse(req.body.toString('utf8'))
+
+    const result = await handleStripeWebhookEvent(event)
+    res.json({ received: true, ...result })
+  } catch (err) {
+    console.error('Stripe webhook failed:', err)
+    res.status(400).json({ error: err.message || 'Stripe webhook failed' })
+  }
+})
+
 app.use(express.json())
 app.use(cookieParser())
 
@@ -45,6 +62,7 @@ app.use('/api/payments', paymentRoutes)
 app.use('/api/identity-review', identityReviewRoutes)
 app.use('/api/kyc', identityReviewRoutes)
 app.use('/api/risk', riskRoutes)
+app.use('/api/merchant/stripe', merchantStripeRoutes)
 
 const redirectToLogin = (res) => {
   const loginUrl = new URL('/login', env.corsOrigin)
@@ -71,6 +89,28 @@ app.get('/admin-identity-review.html', requireAdminPageLogin, (_req, res) => {
 
 app.get('/identity-review.css', authenticateAdminToken, (_req, res) => {
   res.sendFile(path.join(identityReviewAssetDir, 'identity-review.css'))
+})
+
+app.get('/api/stripe/test', async (_req, res) => {
+  try {
+    const accounts = await stripe.accounts.list({ limit: 3 })
+
+    res.json({
+      success: true,
+      message: 'Stripe Sandbox connection successful',
+      connectedAccounts: accounts.data.map((account) => ({
+        id: account.id,
+        email: account.email,
+        type: account.type,
+      })),
+    })
+  } catch (error) {
+    console.error('Stripe test failed:', error)
+    res.status(500).json({
+      success: false,
+      error: error.message,
+    })
+  }
 })
 
 app.get('/identity-review.js', authenticateAdminToken, (_req, res) => {
@@ -111,7 +151,7 @@ app.get('/api/admin-dashboard/overview', authenticateAdminToken, async (_req, re
         `SELECT
            COUNT(*) AS total_settlements,
            COALESCE(SUM(net_settlement_sgd_amount), 0) AS total_settlement_value,
-           SUM(CASE WHEN status IN ('CONVERTED_TO_SGD', 'SETTLEMENT_PENDING') THEN 1 ELSE 0 END) AS pending_settlements
+           SUM(CASE WHEN status IN ('CONVERTED_TO_SGD', 'SETTLEMENT_PENDING', 'ELIGIBLE', 'PROCESSING', 'HELD') THEN 1 ELSE 0 END) AS pending_settlements
          FROM settlements`
       ),
       pool.query(
@@ -211,6 +251,10 @@ app.get('/api/admin-dashboard/overview', authenticateAdminToken, async (_req, re
          s.gross_sgd_amount,
          s.provider_fee_sgd,
          s.platform_fee_sgd,
+         s.conversion_cost_sgd,
+         s.network_fee_sgd,
+         s.buffer_reserved_sgd,
+         s.buffer_released_sgd,
          s.net_settlement_sgd_amount,
          s.status,
          s.provider_reference,
@@ -350,10 +394,10 @@ app.get('/api/dashboard/stats', authenticateToken, async (req, res) => {
   try {
     const [grossRow] = await pool.query(
       `SELECT COALESCE(SUM(gross_sgd_amount), 0) AS total_gross,
-              COALESCE(SUM(provider_fee_sgd + platform_fee_sgd), 0) AS total_fees,
+              COALESCE(SUM(platform_fee_sgd + COALESCE(NULLIF(conversion_cost_sgd, 0), provider_fee_sgd) + network_fee_sgd), 0) AS total_fees,
               COALESCE(SUM(net_settlement_sgd_amount), 0) AS total_net
        FROM settlements
-       WHERE merchant_id = ? AND status IN ('SETTLED', 'PAID_OUT')`,
+       WHERE merchant_id = ? AND status IN ('TRANSFERRED', 'SETTLED', 'PAID_OUT')`,
       [req.merchantId]
     )
 
@@ -391,6 +435,10 @@ app.get('/api/dashboard/payments', authenticateToken, async (req, res) => {
          s.net_settlement_sgd_amount,
          s.provider_fee_sgd,
          s.platform_fee_sgd,
+         s.conversion_cost_sgd,
+         s.network_fee_sgd,
+         s.buffer_reserved_sgd,
+         s.buffer_released_sgd,
          s.provider_reference AS settlement_provider_reference,
          s.status AS settlement_status,
          s.converted_at AS settlement_converted_at,
@@ -469,13 +517,14 @@ const settlementJobAuth = (req, res, next) => {
 
 app.post('/api/settlements/run-t1', settlementJobAuth, async (req, res) => {
   try {
-    await markConvertedSettlementsPending()
-    await createPayoutBatchesForPendingSettlements()
-    await finalizeProcessingPayouts()
+    const result = await runDailyMerchantSettlements({
+      settlementDate: req.body?.settlementDate,
+    })
     res.json({
       ok: true,
       settlementType: req.body?.settlementType || 'T_PLUS_1',
       trigger: req.body?.trigger || 'manual',
+      ...result,
       processedAt: new Date().toISOString(),
     })
   } catch (err) {

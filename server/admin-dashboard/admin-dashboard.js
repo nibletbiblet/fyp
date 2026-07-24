@@ -5,6 +5,7 @@ const els = {
 }
 
 let dashboardData = null
+let selectedMerchantId = null
 
 const pageMeta = {
   overview: ['Admin Overview', 'Platform Operations', 'Summary of payment, settlement, payout, risk, and system health.'],
@@ -185,8 +186,49 @@ function merchantRows(rows) {
       <td class="mono">${row.stripe_connected_account_id || '-'}</td>
       <td>${money(row.total_transaction_value)}</td>
       <td>${money(row.total_payouts)}</td>
-      <td><button class="mini-button" type="button" disabled>View</button></td>
+      <td><button class="mini-button" type="button" data-action="view-merchant" data-merchant-id="${row.merchant_id}">View</button></td>
     </tr>`)
+}
+
+function renderMerchantDetail(merchant) {
+  const merchantPayments = dashboardData.recentPayments.filter((row) => String(row.merchant_id) === String(merchant.merchant_id))
+  const merchantSettlements = dashboardData.recentSettlements.filter((row) => String(row.merchant_id) === String(merchant.merchant_id))
+  const merchantPayouts = dashboardData.recentPayouts.filter((row) => String(row.merchant_id) === String(merchant.merchant_id))
+
+  return `
+    <div class="detail-header">
+      <button class="mini-button" type="button" data-action="back-to-merchants">Back</button>
+      <div>
+        <h3>${merchant.name || '-'}</h3>
+        <p>${merchant.email || '-'}</p>
+      </div>
+    </div>
+    <section class="summary-grid">
+      <article class="summary-card">
+        <div class="summary-label">Account Status</div>
+        <div class="summary-value small">${badge(merchant.status)}</div>
+        <div class="summary-note">Merchant account state</div>
+      </article>
+      <article class="summary-card">
+        <div class="summary-label">KYC Status</div>
+        <div class="summary-value small">${badge(merchant.kyc_status)}</div>
+        <div class="summary-note">Merchant verification state</div>
+      </article>
+      <article class="summary-card">
+        <div class="summary-label">Transaction Value</div>
+        <div class="summary-value">${money(merchant.total_transaction_value)}</div>
+        <div class="summary-note">Total recorded payment value</div>
+      </article>
+      <article class="summary-card">
+        <div class="summary-label">Total Payouts</div>
+        <div class="summary-value">${money(merchant.total_payouts)}</div>
+        <div class="summary-note">Paid-out value</div>
+      </article>
+    </section>
+    ${panel('Merchant Payments', `${merchantPayments.length} recent records`, table(['Payment ID', 'Wallet', 'Merchant', 'SGD', 'Crypto', 'Tx Hash', 'Status', 'Created'], paymentRows(merchantPayments), 'No recent payments for this merchant.'))}
+    ${panel('Merchant Settlements', `${merchantSettlements.length} recent records`, table(['Settlement ID', 'Merchant', 'Gross SGD', 'Provider Fee', 'Platform Fee', 'Net Settlement', 'Status', 'Provider Reference', 'Created Date'], settlementRows(merchantSettlements), 'No recent settlements for this merchant.'))}
+    ${panel('Merchant Payouts', `${merchantPayouts.length} recent records`, table(['Payout Batch', 'Merchant', 'Settlements', 'Gross', 'Fee', 'Net', 'Status', 'Stripe Transfer ID', 'Stripe Payout ID', 'Paid Out'], payoutRows(merchantPayouts), 'No recent payouts for this merchant.'))}
+  `
 }
 
 function flaggedCards(rows) {
@@ -258,7 +300,12 @@ function renderPage() {
     return
   }
   if (activeSection === 'merchants') {
-    els.pageContent.innerHTML = panel('Merchants', `${data.merchants.length} records`, table(['Merchant Name', 'Email', 'Account Status', 'KYC Status', 'Payout Status', 'Stripe Connected Account', 'Total Transaction Value', 'Total Payouts', 'Actions'], merchantRows(data.merchants), 'No merchants yet.'))
+    const selectedMerchant = selectedMerchantId
+      ? data.merchants.find((merchant) => String(merchant.merchant_id) === String(selectedMerchantId))
+      : null
+    els.pageContent.innerHTML = selectedMerchant
+      ? renderMerchantDetail(selectedMerchant)
+      : panel('Merchants', `${data.merchants.length} records`, table(['Merchant Name', 'Email', 'Account Status', 'KYC Status', 'Payout Status', 'Stripe Connected Account', 'Total Transaction Value', 'Total Payouts', 'Actions'], merchantRows(data.merchants), 'No merchants yet.'))
     return
   }
   if (activeSection === 'risk') {
@@ -288,6 +335,7 @@ async function loadOverview() {
 
 function setActiveSection(section) {
   activeSection = pageMeta[section] ? section : 'overview'
+  if (activeSection !== 'merchants') selectedMerchantId = null
   document.querySelectorAll('.nav-item').forEach((item) => {
     item.classList.toggle('active', item.dataset.section === activeSection)
   })
@@ -312,4 +360,18 @@ window.addEventListener('hashchange', () => {
 
 setActiveSection(activeSection)
 els.refreshBtn.addEventListener('click', loadOverview)
+els.pageContent.addEventListener('click', (event) => {
+  const button = event.target.closest('button[data-action]')
+  if (!button) return
+
+  if (button.dataset.action === 'view-merchant') {
+    selectedMerchantId = button.dataset.merchantId
+    renderPage()
+  }
+
+  if (button.dataset.action === 'back-to-merchants') {
+    selectedMerchantId = null
+    renderPage()
+  }
+})
 loadOverview()

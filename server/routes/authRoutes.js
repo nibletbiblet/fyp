@@ -30,16 +30,17 @@ const clearAuthCookieOptions = {
  */
 router.post('/register', async (req, res) => {
   try {
-    const { businessName, uen, email, password, bankName, bankHolderName, bankAccountNumber } = req.body
+    const { businessName, email, password, bankName, bankHolderName, bankAccountNumber } = req.body
+    const uen = String(req.body.uen || '').replace(/\D/g, '')
 
     // Basic validation
     if (!businessName || !email || !password || !bankName || !bankHolderName || !bankAccountNumber) {
       return res.status(400).json({ error: 'All required fields must be provided' })
     }
 
-    // UEN format validation (Singapore: 8 digits + 1 letter)
-    if (uen && !/^\d{8}[A-Z]$/.test(uen)) {
-      return res.status(400).json({ error: 'Invalid UEN format. Expected 8 digits followed by a capital letter (e.g. 53912345M)' })
+    // UEN format validation for the Stripe sandbox test companies used in this project.
+    if (!/^\d{9}$/.test(uen)) {
+      return res.status(400).json({ error: 'Invalid UEN format. Expected 9 digits (e.g. 123456789)' })
     }
 
     // Email format validation
@@ -105,6 +106,7 @@ router.post('/verify-email', async (req, res) => {
       merchantId: result.merchantId,
       containerId: result.containerId,
       walletId: result.walletId,
+      stripeConnectedAccountId: result.stripeConnectedAccountId,
     })
   } catch (err) {
     if (err.code === 'INVALID_TOKEN') {

@@ -56,6 +56,11 @@ export const env = {
     stablecoinSgdRate: Number.parseFloat(process.env.MOCK_STABLECOIN_SGD_RATE ?? '1.35'),
   },
   settlementJobSecret: process.env.SETTLEMENT_JOB_SECRET ?? '',
+  stripe: {
+    secretKey: process.env.STRIPE_SECRET_KEY ?? '',
+    webhookSecret: process.env.STRIPE_WEBHOOK_SECRET ?? '',
+    connectCountry: process.env.STRIPE_CONNECT_COUNTRY ?? 'SG',
+  },
   admin: {
     email: process.env.ADMIN_EMAIL ?? 'admin@chainforge.local',
     password: process.env.ADMIN_PASSWORD ?? (process.env.NODE_ENV === 'production' ? '' : 'Admin@123456'),

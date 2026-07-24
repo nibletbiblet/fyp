@@ -42,7 +42,7 @@ export default function RegisterPage() {
   const [bankAccountNumber, setBankAccountNumber] = useState('')
 
   // Validators
-  const validateUen = (v: string) => /^\d{8}[A-Z]$/.test(v)
+  const validateUen = (v: string) => /^\d{9}$/.test(v)
   const validateEmail = (v: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)
   const validatePassword = (v: string) => v.length >= 8
 
@@ -152,11 +152,11 @@ export default function RegisterPage() {
             <FormInput
               label="Business Registration Number (UEN)"
               name="uen"
-              placeholder="e.g. 53912345M"
+              placeholder="e.g. 123456789"
               value={uen}
-              onChange={(e) => setUen(e.target.value.toUpperCase())}
+              onChange={(e) => setUen(e.target.value.replace(/\D/g, '').slice(0, 9))}
               validate={validateUen}
-              error="Expected format: 8 digits + 1 capital letter (e.g. 53912345M)"
+              error="Expected format: 9 digits (e.g. 123456789)"
               required
             />
           </div>

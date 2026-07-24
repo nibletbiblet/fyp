@@ -14,6 +14,14 @@ interface MerchantProfile {
   kyc_status: string
   container_id: string | null
   wallet_id: string | null
+  stripe_connected_account_id: string | null
+  stripe_onboarding_status: string | null
+  stripe_details_submitted: number | boolean | null
+  stripe_payouts_enabled: number | boolean | null
+  stripe_charges_enabled: number | boolean | null
+  stripe_requirements_currently_due: string[] | string | null
+  stripe_requirements_disabled_reason: string | null
+  stripe_status_synced_at: string | null
   onboarded_at: string | null
   created_at: string
 }
@@ -34,6 +42,10 @@ interface PaymentRecord {
   net_settlement_sgd_amount: number | null
   provider_fee_sgd: number | null
   platform_fee_sgd: number | null
+  conversion_cost_sgd: number | null
+  network_fee_sgd: number | null
+  buffer_reserved_sgd: number | null
+  buffer_released_sgd: number | null
   settlement_provider_reference: string | null
   settlement_status: string | null
   payout_reference: string | null
@@ -57,6 +69,10 @@ interface SettlementRecord {
   platform_fee_sgd: number
   net_settlement_sgd_amount: number
   conversion_rate: number | null
+  conversion_cost_sgd: number | null
+  network_fee_sgd: number | null
+  buffer_reserved_sgd: number | null
+  buffer_released_sgd: number | null
   provider_reference: string | null
   status: string
   converted_at: string | null
@@ -109,6 +125,8 @@ export default function DashboardPage() {
   const [payments, setPayments] = useState<PaymentRecord[]>([])
   const [settlements, setSettlements] = useState<SettlementRecord[]>([])
   const [dashboardError, setDashboardError] = useState('')
+  const [payoutSetupLoading, setPayoutSetupLoading] = useState(false)
+  const [payoutSetupError, setPayoutSetupError] = useState('')
 
   // Animation state — tracks when values change to trigger visual effects
   const prevStatsRef = useRef<DashboardStats | null>(null)
@@ -270,6 +288,44 @@ export default function DashboardPage() {
     navigate('/login')
   }
 
+  const getStripeRequirements = () => {
+    const value = merchant?.stripe_requirements_currently_due
+    if (!value) return []
+    if (Array.isArray(value)) return value
+    try {
+      const parsed = JSON.parse(value)
+      return Array.isArray(parsed) ? parsed : []
+    } catch {
+      return []
+    }
+  }
+
+  const isPayoutSetupComplete = () => Boolean(
+    merchant?.stripe_connected_account_id
+      && merchant.stripe_onboarding_status === 'COMPLETE'
+      && Boolean(Number(merchant.stripe_details_submitted))
+      && Boolean(Number(merchant.stripe_payouts_enabled))
+      && !merchant.stripe_requirements_disabled_reason
+      && getStripeRequirements().length === 0
+  )
+
+  const handlePayoutSetup = async () => {
+    setPayoutSetupLoading(true)
+    setPayoutSetupError('')
+    try {
+      const res = await fetch('/api/merchant/stripe/onboarding-link', {
+        method: 'POST',
+        credentials: 'include',
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || 'Unable to create Stripe payout setup link')
+      window.location.href = data.url
+    } catch (err) {
+      setPayoutSetupError(err instanceof Error ? err.message : 'Unable to create Stripe payout setup link')
+      setPayoutSetupLoading(false)
+    }
+  }
+
   const getInitials = (name: string) => {
     return name
       .split(' ')
@@ -280,11 +336,12 @@ export default function DashboardPage() {
   }
 
   const getStatusBadge = (status: string) => {
-    if (status === 'ACTIVE_ONBOARDED' || status === 'SETTLED') return 'onboarded'
-    if (status === 'CONFIRMED' || status === 'CONVERTED_TO_SGD') return 'confirming'
+    if (status === 'ACTIVE_ONBOARDED' || status === 'SETTLED' || status === 'TRANSFERRED' || status === 'PAID_OUT') return 'onboarded'
+    if (status === 'CONFIRMED' || status === 'CONVERTED_TO_SGD' || status === 'PROCESSING') return 'confirming'
     if (status === 'PAYMENT_DETECTED' || status === 'CONFIRMING') return 'detecting'
-    if (status === 'ACTIVE_UNVERIFIED' || status === 'CREATED' || status === 'AWAITING_PAYMENT' || status === 'AWAITING_CRYPTO_SELECTION' || status === 'KYC_REQUIRED') return 'unverified'
+    if (status === 'ACTIVE_UNVERIFIED' || status === 'CREATED' || status === 'AWAITING_PAYMENT' || status === 'AWAITING_CRYPTO_SELECTION' || status === 'KYC_REQUIRED' || status === 'ELIGIBLE' || status === 'SETTLEMENT_PENDING') return 'unverified'
     if (status === 'MANUAL_REVIEW_REQUIRED') return 'detecting'
+    if (status === 'HELD') return 'unverified'
     if (status === 'FAILED' || status === 'EXPIRED') return 'suspended'
     return 'suspended'
   }
@@ -624,6 +681,42 @@ export default function DashboardPage() {
               <div className="infra-card-label">Settlement Wallet ID</div>
               <div className="infra-card-value">{merchant?.wallet_id || '—'}</div>
             </div>
+            <div className={`infra-card ${isPayoutSetupComplete() ? 'payout-ready-card' : 'payout-action-card'}`}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
+                <div>
+                  <div className="infra-card-label">Stripe Payout Setup</div>
+                  <div className="infra-card-value">
+                    {merchant?.stripe_onboarding_status?.replace(/_/g, ' ') || 'NOT STARTED'}
+                  </div>
+                </div>
+                <span className={`status-badge ${isPayoutSetupComplete() ? 'onboarded' : 'unverified'}`} style={{ fontSize: 10 }}>
+                  {isPayoutSetupComplete() ? 'Ready' : 'Incomplete'}
+                </span>
+              </div>
+              <div style={{ marginTop: 14, display: 'grid', gap: 6, fontSize: 12, color: 'rgba(255,255,255,0.45)' }}>
+                <div>Connected account: <span style={{ color: 'rgba(255,255,255,0.72)' }}>{merchant?.stripe_connected_account_id || 'Pending'}</span></div>
+                <div>Payouts enabled: <span style={{ color: merchant?.stripe_payouts_enabled ? '#22c55e' : '#f59e0b' }}>{merchant?.stripe_payouts_enabled ? 'Yes' : 'No'}</span></div>
+                {merchant?.stripe_requirements_disabled_reason && (
+                  <div>Disabled reason: {merchant.stripe_requirements_disabled_reason}</div>
+                )}
+                {getStripeRequirements().length > 0 && (
+                  <div>Currently due: {getStripeRequirements().slice(0, 3).join(', ')}{getStripeRequirements().length > 3 ? '...' : ''}</div>
+                )}
+              </div>
+              {!isPayoutSetupComplete() && (
+                <button
+                  className="btn-dashboard-primary"
+                  onClick={handlePayoutSetup}
+                  disabled={payoutSetupLoading}
+                  style={{ marginTop: 16, width: '100%', justifyContent: 'center' }}
+                >
+                  {payoutSetupLoading ? 'Opening Stripe...' : 'Complete payout setup'}
+                </button>
+              )}
+              {payoutSetupError && (
+                <div style={{ marginTop: 10, color: '#ef4444', fontSize: 12 }}>{payoutSetupError}</div>
+              )}
+            </div>
           </div>
         )}
           </>
@@ -714,13 +807,13 @@ export default function DashboardPage() {
                           fontSize: 12,
                         }}>
                           {(p.provider_fee_sgd !== null && p.platform_fee_sgd !== null)
-                            ? `S$ ${(Number(p.provider_fee_sgd) + Number(p.platform_fee_sgd) + Number(p.payout_fee_sgd || 0)).toFixed(2)}`
+                            ? `S$ ${(Number(p.platform_fee_sgd) + Number(p.conversion_cost_sgd ?? p.provider_fee_sgd) + Number(p.network_fee_sgd || 0) + Number(p.payout_fee_sgd || 0)).toFixed(2)}`
                             : '—'}
                         </td>
                         <td>
                           {p.settlement_status ? (
                             <div style={{ display: 'grid', gap: 4 }}>
-                              <span className={`status-badge ${p.payout_status === 'PAID_OUT' ? 'onboarded' : p.settlement_status === 'SETTLED' ? 'confirming' : 'detecting'}`} style={{ fontSize: 10 }}>
+                              <span className={`status-badge ${p.payout_status === 'PAID_OUT' ? 'onboarded' : getStatusBadge(p.settlement_status)}`} style={{ fontSize: 10 }}>
                                 {(p.payout_status || p.settlement_status).replace(/_/g, ' ')}
                               </span>
                               <span style={{ color: 'rgba(255,255,255,0.35)', fontSize: 10, fontFamily: "'Space Mono', monospace" }}>
@@ -794,8 +887,10 @@ export default function DashboardPage() {
                       <th>Settlement ID</th>
                       <th>Payment</th>
                       <th>Gross (SGD)</th>
-                      <th>Provider Fee</th>
                       <th>Platform Fee</th>
+                      <th>Conversion Cost</th>
+                      <th>Network Fee</th>
+                      <th>Buffer Released</th>
                       <th>Net Settlement</th>
                       <th>Status</th>
                       <th>Payout</th>
@@ -817,13 +912,15 @@ export default function DashboardPage() {
                           </div>
                         </td>
                         <td style={{ fontWeight: 600 }}>S$ {Number(s.gross_sgd_amount).toFixed(2)}</td>
-                        <td>S$ {Number(s.provider_fee_sgd || 0).toFixed(2)}</td>
                         <td>S$ {Number(s.platform_fee_sgd || 0).toFixed(2)}</td>
+                        <td>S$ {Number((s.conversion_cost_sgd ?? s.provider_fee_sgd) || 0).toFixed(2)}</td>
+                        <td>S$ {Number(s.network_fee_sgd || 0).toFixed(2)}</td>
+                        <td style={{ color: '#22c55e' }}>S$ {Number(s.buffer_released_sgd || 0).toFixed(2)}</td>
                         <td style={{ color: '#22c55e', fontWeight: 700 }}>
                           S$ {Number(s.net_settlement_sgd_amount).toFixed(2)}
                         </td>
                         <td>
-                          <span className={`status-badge ${s.status === 'PAID_OUT' ? 'onboarded' : s.status === 'SETTLED' ? 'confirming' : 'detecting'}`} style={{ fontSize: 10 }}>
+                          <span className={`status-badge ${getStatusBadge(s.status)}`} style={{ fontSize: 10 }}>
                             {s.status.replace(/_/g, ' ')}
                           </span>
                         </td>
