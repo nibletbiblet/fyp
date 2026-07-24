@@ -3,6 +3,7 @@ import bcrypt from 'bcrypt'
 import jwt from 'jsonwebtoken'
 import pool from '../config/db.js'
 import { env } from '../config/env.js'
+import { ensureStripeConnectedAccountForMerchant } from './stripeConnectService.js'
 
 const SALT_ROUNDS = 10
 const DUMMY_PASSWORD_HASH = '$2b$10$C6UzMDM.H6dfI/f/IKcEeO15D/MH6fiHvo4G7Yx1uUymRETrx2rga'
@@ -94,6 +95,13 @@ export async function createMerchant({
       [merchantId, email, passwordHash, passwordSalt, bankHolderName]
     )
 
+    await conn.query(
+      `INSERT INTO merchant_fee_profiles (merchant_id)
+       VALUES (?)
+       ON DUPLICATE KEY UPDATE merchant_id = VALUES(merchant_id)`,
+      [merchantId]
+    )
+
     const verificationToken = createEmailVerificationToken(merchantId)
 
     // 5. Audit log
@@ -143,11 +151,13 @@ export async function verifyEmailAndProvision(token) {
     const containerId = `CTR-${crypto.randomBytes(8).toString('hex').toUpperCase()}`
     const walletId = `WLT-${crypto.randomBytes(8).toString('hex').toUpperCase()}`
 
+    const stripeConnectedAccountId = await ensureStripeConnectedAccountForMerchant(merchant.id, conn)
+
     await conn.query(
       `UPDATE merchants SET
         status = 'ACTIVE_ONBOARDED',
-        triplea_merchant_id = ?,
-        triplea_wallet_id = ?
+        container_id = ?,
+        wallet_id = ?
       WHERE id = ?`,
       [containerId, walletId, merchant.id]
     )
@@ -159,7 +169,7 @@ export async function verifyEmailAndProvision(token) {
     )
 
     await conn.commit()
-    return { merchantId: merchant.id, containerId, walletId, alreadyVerified: false }
+    return { merchantId: merchant.id, containerId, walletId, stripeConnectedAccountId, alreadyVerified: false }
   } catch (err) {
     await conn.rollback()
     throw err
@@ -227,8 +237,16 @@ export async function getMerchantProfile(merchantId) {
        account_last4 AS bank_account_last4,
        kyc_status,
        status,
-       triplea_merchant_id AS container_id,
-       triplea_wallet_id AS wallet_id,
+       container_id,
+       wallet_id,
+       stripe_connected_account_id,
+       stripe_onboarding_status,
+       stripe_details_submitted,
+       stripe_payouts_enabled,
+       stripe_charges_enabled,
+       stripe_requirements_currently_due,
+       stripe_requirements_disabled_reason,
+       stripe_status_synced_at,
        CASE WHEN status = 'ACTIVE_ONBOARDED' THEN updated_at ELSE NULL END AS email_verified_at,
        CASE WHEN status = 'ACTIVE_ONBOARDED' THEN updated_at ELSE NULL END AS onboarded_at,
        created_at

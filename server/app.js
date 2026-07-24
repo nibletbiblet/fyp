@@ -1,19 +1,54 @@
-import crypto from 'node:crypto'
 import cors from 'cors'
 import express from 'express'
 import cookieParser from 'cookie-parser'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+import jwt from 'jsonwebtoken'
 import { env } from './config/env.js'
+import stripe from './config/stripe.js'
 import pool from './config/db.js'
-import { createToken, authenticateToken } from './middleware/auth.js'
-import { hashPassword, verifyPassword, getUserByEmail } from './utils/auth.js'
+import { authenticateAdminToken, authenticateToken } from './middleware/auth.js'
+import authRoutes from './routes/authRoutes.js'
+import adminAuthRoutes from './routes/adminAuthRoutes.js'
+import paymentRoutes from './routes/paymentRoutes.js'
+import identityReviewRoutes from './routes/identityReviewRoutes.js'
+import riskRoutes from './routes/riskRoutes.js'
+import merchantStripeRoutes from './routes/merchantStripeRoutes.js'
+import { startSettlementWorker } from './services/settlementWorker.js'
+import { ensureKycSchema } from './services/identityReviewService.js'
+import { ensureMainSchema } from './services/schemaService.js'
+import { ensureRiskSchema } from './services/riskService.js'
+import { submitKyc, processKycCallback, getKycStatus } from './services/kycService.js'
+import {
+  handleStripeWebhookEvent,
+  runDailyMerchantSettlements,
+} from './services/settlementService.js'
 
 export const app = express()
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
+const identityReviewAssetDir = path.join(__dirname, 'admin-identity-review')
+const adminDashboardAssetDir = path.join(__dirname, 'admin-dashboard')
 
 app.use(cors({ origin: env.corsOrigin, credentials: true }))
+
+app.post('/api/stripe/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
+  try {
+    const signature = req.headers['stripe-signature']
+    const event = env.stripe.webhookSecret
+      ? stripe.webhooks.constructEvent(req.body, signature, env.stripe.webhookSecret)
+      : JSON.parse(req.body.toString('utf8'))
+
+    const result = await handleStripeWebhookEvent(event)
+    res.json({ received: true, ...result })
+  } catch (err) {
+    console.error('Stripe webhook failed:', err)
+    res.status(400).json({ error: err.message || 'Stripe webhook failed' })
+  }
+})
+
 app.use(express.json())
 app.use(cookieParser())
 
-// ── Health check ──
 app.get('/health', (_req, res) => {
   res.json({
     status: 'ok',
@@ -22,385 +57,37 @@ app.get('/health', (_req, res) => {
   })
 })
 
-// Valid roles for role-based access control.
-// Only CEO, CFO, and Tech Lead can register accounts per merchant.
-const VALID_ROLES = ['CEO', 'CFO', 'TECH_LEAD']
+app.use('/api/auth', authRoutes)
+app.use('/api/admin-auth', adminAuthRoutes)
+app.use('/api/payments', paymentRoutes)
+app.use('/api/identity-review', identityReviewRoutes)
+app.use('/api/kyc', identityReviewRoutes)
+app.use('/api/risk', riskRoutes)
+app.use('/api/merchant/stripe', merchantStripeRoutes)
 
-// ══════════════════════════════════════════════════════════════
-//  POST /api/auth/register
-//  Registers a new merchant + merchant_user with role.
-//
-//  Each merchant can have at most 3 users:
-//    - 1 CEO
-//    - 1 CFO
-//    - 1 TECH_LEAD
-//
-//  The first user registering for a UEN creates the merchant.
-//  Subsequent users for the same UEN are added to the existing merchant.
-// ══════════════════════════════════════════════════════════════
-app.post('/api/auth/register', async (req, res) => {
-  const conn = await pool.getConnection()
-  try {
-    const { name, email, password, uen, bankName, accountHolderName, accountNo, role, fullName } = req.body
+app.get('/api/acra/lookup/:uen', async (req, res) => {
+  const uen = req.params.uen?.trim().toUpperCase()
+  if (!uen) return res.status(400).json({ error: 'UEN is required' })
 
-    // ── Input validation ──
-    if (!name || !email || !password || !uen || !bankName || !accountHolderName || !accountNo) {
-      return res.status(400).json({ error: 'All fields are required: name, email, password, uen, bankName, accountHolderName, accountNo' })
-    }
-
-    if (!role || !VALID_ROLES.includes(role)) {
-      return res.status(400).json({ error: `Role is required and must be one of: ${VALID_ROLES.join(', ')}` })
-    }
-
-    if (!fullName || fullName.trim().length < 2) {
-      return res.status(400).json({ error: 'Full name is required (minimum 2 characters)' })
-    }
-
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      return res.status(400).json({ error: 'Invalid email format' })
-    }
-
-    if (password.length < 8) {
-      return res.status(400).json({ error: 'Password must be at least 8 characters' })
-    }
-
-    // UEN format validation (Singapore: 8–9 digits + 1 letter, or other accepted formats)
-    if (!/^\d{8,9}[A-Z]$/.test(uen)) {
-      return res.status(400).json({ error: 'Invalid UEN format. Expected 8-9 digits followed by a capital letter (e.g. 53912345M)' })
-    }
-
-    // ── Check if email is already taken ──
-    const [dupEmail] = await conn.query(
-      'SELECT id FROM merchant_users WHERE email = ?',
-      [email]
-    )
-    if (dupEmail.length > 0) {
-      return res.status(409).json({ error: 'An account with this email already exists' })
-    }
-
-    // ── Hash password using crypto.pbkdf2Sync ──
-    const { hash: passwordHash, salt: passwordSalt } = hashPassword(password)
-
-    // ── Derive last-4 of account number ──
-    const accountLast4 = accountNo.slice(-4)
-
-    // ── Begin transaction ──
-    await conn.beginTransaction()
-
-    // ── Check if a merchant with this UEN already exists ──
-    const [existingMerchant] = await conn.query(
-      'SELECT id, name FROM merchants WHERE bank_account_label = ?',
-      [uen]
-    )
-
-    // ── Mint mock Triple-A infrastructure IDs ──
-    const tripleaMerchantId = `ta_merch_${crypto.randomBytes(12).toString('hex')}`
-    const tripleaWalletId = `ta_wall_${crypto.randomBytes(12).toString('hex')}`
-
-    // Insert into merchants table
-    // status flips to 'ACTIVE_ONBOARDED' since email verification is bypassed/automatic
-    let merchantId
-    if (existingMerchant.length > 0) {
-      merchantId = existingMerchant[0].id
-
-      // Check if this role is already taken for this merchant
-      const [dupRole] = await conn.query(
-        'SELECT id, email FROM merchant_users WHERE merchant_id = ? AND role = ?',
-        [merchantId, role]
-      )
-      if (dupRole.length > 0) {
-        await conn.rollback()
-        return res.status(409).json({
-          error: `The ${role.replace('_', ' ')} role is already assigned to another user for this business (${existingMerchant[0].name})`
-        })
-      }
-    } else {
-      const [merchantResult] = await conn.query(
-        `INSERT INTO merchants (name, email, bank_name, account_holder_name, account_last4, bank_account_label, status, triplea_merchant_id, triplea_wallet_id)
-         VALUES (?, ?, ?, ?, ?, ?, 'ACTIVE_ONBOARDED', ?, ?)`,
-        [name, email, bankName, accountHolderName, accountLast4, uen, tripleaMerchantId, tripleaWalletId]
-      )
-      merchantId = merchantResult.insertId
-    }
-
-    // ── Insert into merchant_users table with role ──
-    const [userResult] = await conn.query(
-      `INSERT INTO merchant_users (merchant_id, email, password_hash, password_salt, full_name, role)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-      [merchantId, email, passwordHash, passwordSalt, fullName.trim(), role]
-    )
-    const userId = userResult.insertId
-
-    await conn.commit()
-
-    // ── Log in the user immediately upon registration ──
-    const token = createToken(merchantId, userId, role)
-
-    // Set HTTP-only cookie
-    res.cookie('token', token, {
-      httpOnly: true,
-      secure: false, // set to true in production
-      sameSite: 'lax',
-      maxAge: 24 * 60 * 60 * 1000, // 24 hours
-    })
-
-    res.status(201).json({
-      message: 'Merchant registered successfully',
-      token,
-      merchant: {
-        merchantId,
-        email,
-        businessName: name,
-        status: 'ACTIVE_ONBOARDED',
-        kycStatus: 'PENDING',
-        role,
-        fullName: fullName.trim(),
-      },
-    })
-  } catch (err) {
-    await conn.rollback().catch(() => {})
-    console.error('Registration error:', err)
-    res.status(500).json({ error: 'Internal server error during registration' })
-  } finally {
-    conn.release()
+  const acraDictionary = {
+    '199201624D': 'Shopee Singapore Pte. Ltd.',
+    '200813955N': 'DBS Bank Ltd.',
+    '200604346E': 'Singapore Airlines Limited',
+    '198000346R': 'Singapore Telecommunications Limited (Singtel)',
+    '201912345': 'ACME Fintech Solutions Pte. Ltd.',
+    '123456789': 'Stripe Sandbox Merchant Pte. Ltd.',
   }
-})
 
-// ══════════════════════════════════════════════════════════════
-//  GET /api/auth/verify-email?merchantId=<id>
-//  Simulates clicking the email verification link.
-//
-//  Generates mock Triple-A container + wallet IDs and flips
-//  merchant status → 'ACTIVE_ONBOARDED' inside a strict ACID
-//  transaction (BEGIN → COMMIT / ROLLBACK).
-// ══════════════════════════════════════════════════════════════
-app.get('/api/auth/verify-email', async (req, res) => {
-  const conn = await pool.getConnection()
-  try {
-    const { merchantId } = req.query
-
-    if (!merchantId) {
-      return res.status(400).json({ error: 'merchantId query parameter is required' })
-    }
-
-    await conn.beginTransaction()
-
-    // ── Look up the merchant ──
-    const [rows] = await conn.query(
-      'SELECT id, name, status FROM merchants WHERE id = ?',
-      [merchantId]
-    )
-    if (rows.length === 0) {
-      await conn.rollback()
-      return res.status(404).json({ error: 'Merchant not found' })
-    }
-
-    const merchant = rows[0]
-
-    // Already onboarded?
-    if (merchant.status === 'ACTIVE_ONBOARDED') {
-      await conn.rollback()
-      return res.json({
-        message: 'Merchant already verified and onboarded',
-        merchantId: merchant.id,
-        alreadyVerified: true,
-      })
-    }
-
-    // ── Mint mock Triple-A infrastructure IDs ──
-    const tripleaMerchantId = `ta_merch_${crypto.randomBytes(12).toString('hex')}`
-    const tripleaWalletId = `ta_wall_${crypto.randomBytes(12).toString('hex')}`
-
-    // ── Atomic update: provision infrastructure + flip status ──
-    await conn.query(
-      `UPDATE merchants
-       SET status = 'ACTIVE_ONBOARDED',
-           triplea_merchant_id = ?,
-           triplea_wallet_id = ?
-       WHERE id = ?`,
-      [tripleaMerchantId, tripleaWalletId, merchant.id]
-    )
-
-    await conn.commit()
-
-    console.log(`✅ Merchant "${merchant.name}" (ID ${merchant.id}) verified and onboarded.`)
-    console.log(`   Triple-A Container: ${tripleaMerchantId}`)
-    console.log(`   Triple-A Wallet:    ${tripleaWalletId}\n`)
-
-    res.json({
-      message: 'Infrastructure provisioned successfully',
-      merchantId: merchant.id,
-      containerId: tripleaMerchantId,
-      walletId: tripleaWalletId,
-    })
-  } catch (err) {
-    await conn.rollback().catch(() => {})
-    console.error('Verification error:', err)
-    res.status(500).json({ error: 'Internal server error during verification' })
-  } finally {
-    conn.release()
+  if (acraDictionary[uen]) {
+    return res.json({ entity_name: acraDictionary[uen], uen, source: 'ACRA_REGISTRY_SIMULATED' })
   }
+
+  res.status(404).json({ error: 'Entity not found in ACRA registry' })
 })
 
-// ══════════════════════════════════════════════════════════════
-//  POST /api/auth/login
-//  Authenticates using getUserByEmail + verifyPassword helpers.
-//  Returns a JWT token with merchantId, userId, and role.
-// ══════════════════════════════════════════════════════════════
-app.post('/api/auth/login', async (req, res) => {
-  try {
-    const { email, password } = req.body
-
-    if (!email || !password) {
-      return res.status(400).json({ error: 'Email and password are required' })
-    }
-
-    // ── Look up the user by email (joins merchant_users + merchants) ──
-    const user = await getUserByEmail(pool, email)
-    if (!user) {
-      // Run a dummy hash to prevent timing leakage
-      hashPassword(password)
-      return res.status(401).json({ error: 'Invalid email or password' })
-    }
-
-    // ── Verify password using crypto.pbkdf2Sync timing-safe comparison ──
-    const isValid = verifyPassword(password, user.password_hash, user.password_salt)
-    if (!isValid) {
-      return res.status(401).json({ error: 'Invalid email or password' })
-    }
-
-    // ── Issue JWT with userId and role ──
-    const token = createToken(user.merchant_id, user.user_id, user.role)
-
-    // Set HTTP-only cookie
-    res.cookie('token', token, {
-      httpOnly: true,
-      secure: false, // set to true in production
-      sameSite: 'lax',
-      maxAge: 24 * 60 * 60 * 1000, // 24 hours
-    })
-
-    res.json({
-      message: 'Login successful',
-      token,
-      merchant: {
-        merchantId: user.merchant_id,
-        email: user.email,
-        businessName: user.merchant_name,
-        status: user.merchant_status,
-        kycStatus: user.kyc_status || 'PENDING',
-        role: user.role,
-        fullName: user.full_name,
-      },
-    })
-  } catch (err) {
-    console.error('Login error:', err)
-    res.status(500).json({ error: 'Internal server error during login' })
-  }
-})
-
-// ══════════════════════════════════════════════════════════════
-//  GET /api/auth/me
-//  Returns the authenticated merchant's profile with role.
-// ══════════════════════════════════════════════════════════════
-app.get('/api/auth/me', authenticateToken, async (req, res) => {
-  try {
-    const [rows] = await pool.query(
-      `SELECT m.id AS merchant_id, m.name AS business_name, m.email,
-              m.bank_name, m.account_holder_name, m.account_last4,
-              m.bank_account_label AS uen, m.status, m.kyc_status,
-              m.triplea_merchant_id AS container_id,
-              m.triplea_wallet_id  AS wallet_id,
-              m.created_at
-       FROM merchants m
-       WHERE m.id = ?`,
-      [req.merchantId]
-    )
-    if (rows.length === 0) {
-      return res.status(404).json({ error: 'Merchant not found' })
-    }
-
-    // Include user-level info (role, name) from JWT
-    const merchant = rows[0]
-    merchant.role = req.userRole
-    merchant.userId = req.userId
-
-    // Fetch the user's full name
-    const [userRows] = await pool.query(
-      'SELECT full_name FROM merchant_users WHERE id = ?',
-      [req.userId]
-    )
-    if (userRows.length > 0) {
-      merchant.fullName = userRows[0].full_name
-    }
-
-    res.json({ merchant })
-  } catch (err) {
-    console.error('Profile error:', err)
-    res.status(500).json({ error: 'Internal server error' })
-  }
-})
-
-// ══════════════════════════════════════════════════════════════
-//  POST /api/auth/resend-verification
-//  Returns a new mock verification URL.
-// ══════════════════════════════════════════════════════════════
-app.post('/api/auth/resend-verification', async (req, res) => {
-  try {
-    const { email } = req.body
-    if (!email) {
-      return res.status(400).json({ error: 'Email is required' })
-    }
-
-    const [rows] = await pool.query(
-      "SELECT id, name FROM merchants WHERE email = ? AND status = 'ACTIVE_UNVERIFIED'",
-      [email]
-    )
-    if (rows.length === 0) {
-      return res.status(404).json({ error: 'No unverified account found for this email' })
-    }
-
-    const merchant = rows[0]
-    const activationLink = `http://localhost:3001/verify-email?merchantId=${merchant.id}`
-    console.log(`\n📧 [MOCK EMAIL RESEND] Activation link for "${merchant.name}":`)
-    console.log(`   ${activationLink}\n`)
-
-    res.json({
-      message: 'Verification link resent',
-      verificationUrl: `/verify-email?merchantId=${merchant.id}`,
-    })
-  } catch (err) {
-    console.error('Resend verification error:', err)
-    res.status(500).json({ error: 'Internal server error' })
-  }
-})
-
-// ══════════════════════════════════════════════════════════════
-//  POST /api/auth/logout
-//  Clears the auth cookie.
-// ══════════════════════════════════════════════════════════════
-app.post('/api/auth/logout', (_req, res) => {
-  res.clearCookie('token')
-  res.json({ message: 'Logged out successfully' })
-})
-
-// ══════════════════════════════════════════════════════════════
-//  KYB (Know Your Business) Verification Routes
-//  These handle the merchant onboarding compliance workflow.
-//  Verification logic runs server-side for reliability.
-//  n8n webhook fires as an optional notification/audit trail.
-// ══════════════════════════════════════════════════════════════
-import { submitKyc, processKycCallback, getKycStatus } from './services/kycService.js'
-
-/**
- * POST /api/kyc/submit
- * Merchant submits KYB verification form.
- * Server-side verification engine processes the submission.
- */
 app.post('/api/kyc/submit', authenticateToken, async (req, res) => {
   try {
     const raw = req.body || {}
-
     const sanitizedKycData = {
       businessName: raw.businessName || 'Singapore SME Merchant',
       uen: raw.uen || '201912345M',
@@ -419,101 +106,39 @@ app.post('/api/kyc/submit', authenticateToken, async (req, res) => {
       termsAccepted: 1,
       infoAccurateDeclaration: 1,
       ubos: raw.ubos || [],
-      documents: raw.documents || []
+      documents: raw.documents || [],
     }
 
-    const merchantId = req.merchantId || 'merchant_demo_id'
-    const result = await submitKyc(merchantId, sanitizedKycData)
+    const result = await submitKyc(req.merchantId, sanitizedKycData)
 
     res.status(201).json({
-      message: 'KYB submission received — compliance review complete',
+      message: 'KYB submission received; compliance review complete',
       submissionId: result.submissionId,
       status: result.status || 'APPROVED',
       riskScore: result.riskScore || 10,
       riskTier: result.riskTier || 'LOW',
-      checkpoints: result.checkpoints || []
+      checkpoints: result.checkpoints || [],
     })
   } catch (err) {
-    console.error('❌ KYB submit error:', err)
-    res.status(200).json({
-      message: 'KYB submission approved',
-      submissionId: 'SUB-SG-2026-OK',
-      status: 'APPROVED',
-      riskScore: 10,
-      riskTier: 'LOW'
-    })
+    console.error('KYB submit error:', err)
+    res.status(500).json({ error: 'Internal server error during KYB submission' })
   }
 })
-app.get('/api/acra/lookup/:uen', async (req, res) => {
-  const uen = req.params.uen?.trim().toUpperCase()
-  if (!uen) return res.status(400).json({ error: 'UEN is required' })
 
-  // 1. Instant ACRA Known Entities Dictionary
-  const ACRA_DICTIONARY = {
-    '199201624D': 'Shopee Singapore Pte. Ltd.',
-    '200813955N': 'DBS Bank Ltd.',
-    '200604346E': 'Singapore Airlines Limited',
-    '198000346R': 'Singapore Telecommunications Limited (Singtel)',
-    'T08GB0032G': 'Central Provident Fund Board (CPF)',
-    '201912345M': 'ACME Fintech Solutions Pte. Ltd.',
-    '53912345M': 'Acme Retail Solutions',
-    '202088991K': 'Merlion Retail Holdings Pte. Ltd.',
-    '201405678W': 'Grabtaxi Holdings Pte. Ltd.',
-    '201314567Z': 'Razer (Asia-Pacific) Pte. Ltd.',
-  }
-
-  if (ACRA_DICTIONARY[uen]) {
-    return res.json({ entity_name: ACRA_DICTIONARY[uen], uen, source: 'ACRA_REGISTRY' })
-  }
-
-  // 2. Fetch live from Singapore Open Government Dataset
-  try {
-    const govRes = await fetch(
-      `https://data.gov.sg/api/action/datastore_search?resource_id=bfb6b2b2-edef-40f4-b2ef-ed98b965f375&q=${uen}`
-    )
-    if (govRes.ok) {
-      const govData = await govRes.json()
-      const records = govData?.result?.records
-      if (records && records.length > 0) {
-        const foundName = records[0].entity_name || records[0].business_name
-        if (foundName) {
-          return res.json({ entity_name: foundName, uen, source: 'DATA_GOV_SG' })
-        }
-      }
-    }
-  } catch (e) {
-    console.warn('ACRA API fetch warning:', e.message)
-  }
-
-  res.status(444).json({ error: 'Entity not found in ACRA registry' })
-})
-
-/**
- * GET /api/kyc/status
- * Returns the merchant's KYB verification status.
- * Frontend polls this to check if review is complete.
- */
 app.get('/api/kyc/status', authenticateToken, async (req, res) => {
   try {
-    const result = await getKycStatus(req.merchantId)
-    res.json(result)
+    res.json(await getKycStatus(req.merchantId))
   } catch (err) {
     console.error('KYB status error:', err)
     res.status(500).json({ error: 'Internal server error' })
   }
 })
 
-/**
- * POST /api/kyc/callback
- * Called by n8n workflow with compliance review results (optional).
- * Protected by shared secret (not JWT — n8n is a system caller).
- */
 app.post('/api/kyc/callback', async (req, res) => {
   try {
     const { submissionId, secret, decision, riskScore, riskTier, screeningResults, reviewerNotes } = req.body
 
-    // Verify callback secret
-    if (secret !== env.n8n.callbackSecret) {
+    if (env.n8n.callbackSecret && secret !== env.n8n.callbackSecret) {
       return res.status(403).json({ error: 'Invalid callback secret' })
     }
 
@@ -531,128 +156,353 @@ app.post('/api/kyc/callback', async (req, res) => {
 
     res.json({ message: 'Callback processed', ...result })
   } catch (err) {
-    if (err.code === 'NOT_FOUND') {
-      return res.status(404).json({ error: 'Submission not found' })
-    }
     console.error('KYB callback error:', err)
     res.status(500).json({ error: 'Internal server error' })
   }
 })
 
-// ══════════════════════════════════════════════════════════════
-//  POST /api/payments
-//  Creates a new payment request (protected).
-// ══════════════════════════════════════════════════════════════
-import { createPayment, selectCrypto, simulatePaymentBroadcast } from './services/paymentService.js'
+const redirectToLogin = (res) => {
+  const loginUrl = new URL('/login', env.corsOrigin)
+  return res.redirect(loginUrl.toString())
+}
 
-app.post('/api/payments', authenticateToken, async (req, res) => {
+const requireAdminPageLogin = (req, res, next) => {
+  const token = req.cookies?.admin_token
+  if (!token) return redirectToLogin(res)
+
   try {
-    const { amountSgd, description } = req.body
+    const payload = jwt.verify(token, env.jwtSecret)
+    if (payload.tokenType !== 'admin' || !payload.adminUserId) return redirectToLogin(res)
+    req.adminUserId = payload.adminUserId
+    return next()
+  } catch {
+    return redirectToLogin(res)
+  }
+}
 
-    if (!amountSgd || isNaN(amountSgd) || Number(amountSgd) <= 0) {
-      return res.status(400).json({ error: 'Valid amount in SGD is required' })
-    }
+app.get('/admin-identity-review.html', requireAdminPageLogin, (_req, res) => {
+  res.sendFile(path.join(identityReviewAssetDir, 'admin-identity-review.html'))
+})
 
-    const { paymentId, paymentReference } = await createPayment(req.merchantId, Number(amountSgd), description)
+app.get('/identity-review.css', authenticateAdminToken, (_req, res) => {
+  res.sendFile(path.join(identityReviewAssetDir, 'identity-review.css'))
+})
 
-    res.status(201).json({
-      message: 'Payment created successfully',
-      paymentId,
-      paymentReference,
-      checkoutUrl: `/checkout/${paymentId}`
+app.get('/api/stripe/test', async (_req, res) => {
+  try {
+    const accounts = await stripe.accounts.list({ limit: 3 })
+
+    res.json({
+      success: true,
+      message: 'Stripe Sandbox connection successful',
+      connectedAccounts: accounts.data.map((account) => ({
+        id: account.id,
+        email: account.email,
+        type: account.type,
+      })),
     })
-  } catch (err) {
-    console.error('Create payment error:', err)
-    res.status(500).json({ error: 'Internal server error during payment creation' })
+  } catch (error) {
+    console.error('Stripe test failed:', error)
+    res.status(500).json({
+      success: false,
+      error: error.message,
+    })
   }
 })
 
-// ══════════════════════════════════════════════════════════════
-//  GET /api/payments/:id
-//  Gets payment + blockchain transactions (public).
-// ══════════════════════════════════════════════════════════════
-app.get('/api/payments/:id', async (req, res) => {
+app.get('/identity-review.js', authenticateAdminToken, (_req, res) => {
+  res.sendFile(path.join(identityReviewAssetDir, 'identity-review.js'))
+})
+
+app.get('/admin-dashboard.html', requireAdminPageLogin, (_req, res) => {
+  res.sendFile(path.join(adminDashboardAssetDir, 'admin-dashboard.html'))
+})
+
+app.get('/admin-dashboard.css', authenticateAdminToken, (_req, res) => {
+  res.sendFile(path.join(adminDashboardAssetDir, 'admin-dashboard.css'))
+})
+
+app.get('/admin-dashboard.js', authenticateAdminToken, (_req, res) => {
+  res.sendFile(path.join(adminDashboardAssetDir, 'admin-dashboard.js'))
+})
+
+app.get('/api/admin-dashboard/overview', authenticateAdminToken, async (_req, res) => {
   try {
-    const { id } = req.params
-    const [rows] = await pool.query(
-      `SELECT p.*, m.name AS merchant_name, m.email AS merchant_email
+    const [[paymentStats], [conversionStats], [settlementStats], [payoutStats], [merchantStats], [riskStats]] = await Promise.all([
+      pool.query(
+        `SELECT
+           COUNT(*) AS total_payments,
+           COALESCE(SUM(amount_sgd), 0) AS total_payment_volume,
+           SUM(CASE WHEN status IN ('CONFIRMED', 'CONVERTED_TO_SGD', 'SETTLED', 'PAID_OUT') THEN 1 ELSE 0 END) AS confirmed_payments,
+           SUM(CASE WHEN status IN ('FAILED', 'EXPIRED', 'MANUAL_REVIEW_REQUIRED') THEN 1 ELSE 0 END) AS failed_or_flagged
+         FROM payments`
+      ),
+      pool.query(
+        `SELECT
+           COUNT(*) AS total_conversions,
+           SUM(CASE WHEN status IN ('PENDING', 'CONVERSION_PROCESSING', 'RETURN_SUBMITTED') THEN 1 ELSE 0 END) AS pending_conversions,
+           SUM(CASE WHEN status IN ('RETURN_CONFIRMED', 'CONVERTED') THEN 1 ELSE 0 END) AS completed_conversions
+         FROM crypto_conversions`
+      ),
+      pool.query(
+        `SELECT
+           COUNT(*) AS total_settlements,
+           COALESCE(SUM(net_settlement_sgd_amount), 0) AS total_settlement_value,
+           SUM(CASE WHEN status IN ('CONVERTED_TO_SGD', 'SETTLEMENT_PENDING', 'ELIGIBLE', 'PROCESSING', 'HELD') THEN 1 ELSE 0 END) AS pending_settlements
+         FROM settlements`
+      ),
+      pool.query(
+        `SELECT
+           COUNT(*) AS total_payouts,
+           SUM(CASE WHEN status = 'PAID_OUT' THEN 1 ELSE 0 END) AS completed_payouts,
+           COALESCE(SUM(net_payout_sgd_amount), 0) AS total_payout_value
+         FROM merchant_payouts`
+      ),
+      pool.query(
+        `SELECT
+           COUNT(*) AS total_merchants,
+           SUM(CASE WHEN status = 'ACTIVE_ONBOARDED' THEN 1 ELSE 0 END) AS active_merchants
+         FROM merchants`
+      ),
+      pool.query(
+        `SELECT
+           COUNT(*) AS total_risk_assessments,
+           SUM(CASE WHEN decision IN ('MANUAL_REVIEW', 'REJECT', 'KYC_REQUIRED') THEN 1 ELSE 0 END) AS flagged_risk
+         FROM risk_assessments`
+      ),
+    ])
+
+    const [paymentStatusRows] = await pool.query(
+      `SELECT status, COUNT(*) AS count
+       FROM payments
+       GROUP BY status
+       ORDER BY count DESC, status ASC`
+    )
+
+    const [recentPayments] = await pool.query(
+      `SELECT
+         p.payment_id,
+         p.payment_reference,
+         p.amount_sgd,
+         p.expected_crypto_amount,
+         p.received_crypto_amount,
+         p.crypto_symbol_snapshot,
+         p.network_snapshot,
+         p.status,
+         p.created_at,
+         m.name AS merchant_name,
+         bt.from_address AS customer_wallet,
+         bt.tx_hash,
+         r.risk_level,
+         r.decision AS risk_decision
        FROM payments p
        JOIN merchants m ON m.id = p.merchant_id
-       WHERE p.payment_id = ?`,
-      [id]
+       LEFT JOIN blockchain_transactions bt
+         ON bt.blockchain_transaction_id = (
+           SELECT bt2.blockchain_transaction_id
+           FROM blockchain_transactions bt2
+           WHERE bt2.payment_id = p.payment_id
+           ORDER BY bt2.created_at DESC
+           LIMIT 1
+         )
+       LEFT JOIN risk_assessments r
+         ON r.risk_assessment_id = (
+           SELECT r2.risk_assessment_id
+           FROM risk_assessments r2
+           WHERE r2.payment_id = p.payment_id
+           ORDER BY r2.created_at DESC
+           LIMIT 1
+         )
+       ORDER BY p.created_at DESC
+       LIMIT 8`
     )
-    if (rows.length === 0) {
-      return res.status(404).json({ error: 'Payment not found' })
-    }
 
-    const [txs] = await pool.query(
-      `SELECT * FROM blockchain_transactions WHERE payment_id = ? ORDER BY detected_at DESC`,
-      [id]
+    const [recentPayouts] = await pool.query(
+      `SELECT
+         mp.payout_id,
+         mp.payout_reference,
+         mp.gross_sgd_amount,
+         mp.payout_fee_sgd,
+         mp.net_payout_sgd_amount,
+         mp.status,
+         mp.provider_reference,
+         mp.stripe_transfer_id,
+         mp.stripe_payout_id,
+         mp.paid_out_at,
+         mp.created_at,
+         m.name AS merchant_name,
+         (
+           SELECT COUNT(*)
+           FROM settlements s
+           WHERE s.payout_id = mp.payout_id
+         ) AS settlement_count
+       FROM merchant_payouts mp
+       JOIN merchants m ON m.id = mp.merchant_id
+       ORDER BY mp.created_at DESC
+       LIMIT 8`
     )
 
-    res.json({ payment: rows[0], transactions: txs })
+    const [recentSettlements] = await pool.query(
+      `SELECT
+         s.settlement_id,
+         s.gross_sgd_amount,
+         s.provider_fee_sgd,
+         s.platform_fee_sgd,
+         s.conversion_cost_sgd,
+         s.network_fee_sgd,
+         s.buffer_reserved_sgd,
+         s.buffer_released_sgd,
+         s.net_settlement_sgd_amount,
+         s.status,
+         s.provider_reference,
+         s.created_at,
+         s.converted_at,
+         s.settled_at,
+         s.paid_out_at,
+         m.name AS merchant_name
+       FROM settlements s
+       JOIN merchants m ON m.id = s.merchant_id
+       ORDER BY s.created_at DESC
+       LIMIT 25`
+    )
+
+    const [recentConversions] = await pool.query(
+      `SELECT
+         cc.conversion_id,
+         cc.payment_id,
+         cc.crypto_currency,
+         cc.crypto_amount,
+         cc.quoted_fiat_amount,
+         cc.quote_exchange_rate,
+         cc.conversion_exchange_rate,
+         cc.actual_fiat_proceeds,
+         cc.conversion_gain_loss,
+         cc.rate_source,
+         cc.faucet_return_address,
+         cc.faucet_return_tx_hash,
+         cc.status,
+         cc.converted_at,
+         cc.created_at,
+         p.payment_reference,
+         m.name AS merchant_name
+       FROM crypto_conversions cc
+       JOIN payments p ON p.payment_id = cc.payment_id
+       JOIN merchants m ON m.id = cc.merchant_id
+       ORDER BY cc.created_at DESC
+       LIMIT 25`
+    )
+
+    const [merchants] = await pool.query(
+      `SELECT
+         m.id AS merchant_id,
+         m.name,
+         m.email,
+         m.status,
+         m.kyc_status,
+         m.payout_enabled,
+         m.stripe_connected_account_id,
+         m.created_at,
+         COALESCE(SUM(p.amount_sgd), 0) AS total_transaction_value,
+         COALESCE((
+           SELECT SUM(mp.net_payout_sgd_amount)
+           FROM merchant_payouts mp
+           WHERE mp.merchant_id = m.id AND mp.status = 'PAID_OUT'
+         ), 0) AS total_payouts
+       FROM merchants m
+       LEFT JOIN payments p ON p.merchant_id = m.id
+       GROUP BY m.id
+       ORDER BY m.created_at DESC
+       LIMIT 25`
+    )
+
+    const [flaggedTransactions] = await pool.query(
+      `SELECT
+         r.risk_assessment_id,
+         r.payment_id,
+         r.wallet_address,
+         r.score,
+         r.risk_level,
+         r.decision,
+         r.reasons,
+         r.created_at,
+         p.payment_reference,
+         p.amount_sgd,
+         p.status AS payment_status,
+         m.name AS merchant_name
+       FROM risk_assessments r
+       JOIN payments p ON p.payment_id = r.payment_id
+       JOIN merchants m ON m.id = p.merchant_id
+       WHERE r.decision IN ('MANUAL_REVIEW', 'REJECT', 'KYC_REQUIRED')
+       ORDER BY r.created_at DESC
+       LIMIT 8`
+    )
+
+    const [recentActivity] = await pool.query(
+      `SELECT
+         audit_log_id,
+         merchant_id,
+         payment_id,
+         settlement_id,
+         payout_id,
+         action,
+         details,
+         created_at
+       FROM audit_logs
+       ORDER BY created_at DESC
+       LIMIT 10`
+    )
+
+    res.json({
+      stats: {
+        totalPaymentVolume: Number(paymentStats[0]?.total_payment_volume || 0),
+        confirmedPayments: Number(paymentStats[0]?.confirmed_payments || 0),
+        pendingConversions: Number(conversionStats[0]?.pending_conversions || 0),
+        completedConversions: Number(conversionStats[0]?.completed_conversions || 0),
+        pendingSettlements: Number(settlementStats[0]?.pending_settlements || 0),
+        completedPayouts: Number(payoutStats[0]?.completed_payouts || 0),
+        totalPayments: Number(paymentStats[0]?.total_payments || 0),
+        totalSettlementValue: Number(settlementStats[0]?.total_settlement_value || 0),
+        totalPayouts: Number(payoutStats[0]?.total_payouts || 0),
+        totalPayoutValue: Number(payoutStats[0]?.total_payout_value || 0),
+        failedOrFlagged: Number(paymentStats[0]?.failed_or_flagged || 0) + Number(riskStats[0]?.flagged_risk || 0),
+        activeMerchants: Number(merchantStats[0]?.active_merchants || 0),
+        totalMerchants: Number(merchantStats[0]?.total_merchants || 0),
+      },
+      paymentStatuses: paymentStatusRows,
+      recentPayments,
+      recentConversions,
+      recentSettlements,
+      recentPayouts,
+      merchants,
+      flaggedTransactions,
+      systemActivity: {
+        settlementWorker: 'RUNNING',
+        lastRefresh: new Date().toISOString(),
+        recentActivity,
+      },
+    })
   } catch (err) {
-    console.error('Fetch payment error:', err)
+    console.error('Fetch admin dashboard overview error:', err)
     res.status(500).json({ error: 'Internal server error' })
   }
 })
 
-// ══════════════════════════════════════════════════════════════
-//  POST /api/payments/:id/select-crypto
-//  Selects network and crypto, generates receiving address & QR.
-// ══════════════════════════════════════════════════════════════
-app.post('/api/payments/:id/select-crypto', async (req, res) => {
-  try {
-    const { id } = req.params
-    const { cryptoSymbol, network } = req.body
-
-    if (!cryptoSymbol || !network) {
-      return res.status(400).json({ error: 'cryptoSymbol and network are required' })
-    }
-
-    await selectCrypto(id, cryptoSymbol, network)
-    res.json({ message: 'Crypto selection updated successfully' })
-  } catch (err) {
-    console.error('Select crypto error:', err)
-    res.status(500).json({ error: err.message || 'Internal server error' })
-  }
-})
-
-// ══════════════════════════════════════════════════════════════
-//  POST /api/payments/:id/simulate-pay
-//  Simulates blockchain broadcast.
-// ══════════════════════════════════════════════════════════════
-app.post('/api/payments/:id/simulate-pay', async (req, res) => {
-  try {
-    const { id } = req.params
-    const { txHash } = await simulatePaymentBroadcast(id)
-    res.json({ message: 'Mock payment transaction broadcasted', txHash })
-  } catch (err) {
-    console.error('Simulation error:', err)
-    res.status(500).json({ error: err.message || 'Internal server error' })
-  }
-})
-
-// ══════════════════════════════════════════════════════════════
-//  GET /api/dashboard/stats
-//  Returns aggregates metrics for stats cards (protected).
-// ══════════════════════════════════════════════════════════════
 app.get('/api/dashboard/stats', authenticateToken, async (req, res) => {
   try {
     const [grossRow] = await pool.query(
       `SELECT COALESCE(SUM(gross_sgd_amount), 0) AS total_gross,
-              COALESCE(SUM(provider_fee_sgd + platform_fee_sgd), 0) AS total_fees,
+              COALESCE(SUM(platform_fee_sgd + COALESCE(NULLIF(conversion_cost_sgd, 0), provider_fee_sgd) + network_fee_sgd), 0) AS total_fees,
               COALESCE(SUM(net_settlement_sgd_amount), 0) AS total_net
        FROM settlements
-       WHERE merchant_id = ?`,
+       WHERE merchant_id = ? AND status IN ('TRANSFERRED', 'SETTLED', 'PAID_OUT')`,
       [req.merchantId]
     )
 
     const [countRow] = await pool.query(
       `SELECT
          COUNT(*) AS total_count,
-         SUM(CASE WHEN status = 'SETTLED' THEN 1 ELSE 0 END) AS settled_count,
-         SUM(CASE WHEN status = 'AWAITING_PAYMENT' OR status = 'PAYMENT_DETECTED' OR status = 'CONFIRMING' THEN 1 ELSE 0 END) AS pending_count
+         SUM(CASE WHEN status IN ('SETTLED', 'PAID_OUT') THEN 1 ELSE 0 END) AS settled_count,
+         SUM(CASE WHEN status IN ('AWAITING_CRYPTO_SELECTION', 'AWAITING_PAYMENT', 'PAYMENT_DETECTED', 'CONFIRMING', 'CONFIRMED', 'CONVERTED_TO_SGD', 'KYC_REQUIRED', 'MANUAL_REVIEW_REQUIRED') THEN 1 ELSE 0 END) AS pending_count
        FROM payments
        WHERE merchant_id = ?`,
       [req.merchantId]
@@ -665,8 +515,8 @@ app.get('/api/dashboard/stats', authenticateToken, async (req, res) => {
         totalNet: Number(grossRow[0].total_net),
         totalCount: Number(countRow[0].total_count),
         settledCount: Number(countRow[0].settled_count),
-        pendingCount: Number(countRow[0].pending_count)
-      }
+        pendingCount: Number(countRow[0].pending_count),
+      },
     })
   } catch (err) {
     console.error('Fetch stats error:', err)
@@ -674,16 +524,42 @@ app.get('/api/dashboard/stats', authenticateToken, async (req, res) => {
   }
 })
 
-// ══════════════════════════════════════════════════════════════
-//  GET /api/dashboard/payments
-//  Returns payments list (protected).
-// ══════════════════════════════════════════════════════════════
 app.get('/api/dashboard/payments', authenticateToken, async (req, res) => {
   try {
     const [rows] = await pool.query(
-      `SELECT p.*, s.net_settlement_sgd_amount, s.provider_fee_sgd, s.platform_fee_sgd
+      `SELECT
+         p.*,
+         s.net_settlement_sgd_amount,
+         s.provider_fee_sgd,
+         s.platform_fee_sgd,
+         s.conversion_cost_sgd,
+         s.network_fee_sgd,
+         s.buffer_reserved_sgd,
+         s.buffer_released_sgd,
+         s.provider_reference AS settlement_provider_reference,
+         s.status AS settlement_status,
+         s.converted_at AS settlement_converted_at,
+         s.settled_at AS settlement_settled_at,
+         s.paid_out_at AS settlement_paid_out_at,
+         mp.payout_reference,
+         mp.payout_fee_sgd,
+         mp.net_payout_sgd_amount,
+         mp.status AS payout_status,
+         mp.paid_out_at AS payout_paid_out_at,
+         r.score AS risk_severity_value,
+         r.risk_level,
+         r.decision AS risk_decision
        FROM payments p
        LEFT JOIN settlements s ON s.payment_id = p.payment_id
+       LEFT JOIN merchant_payouts mp ON mp.payout_id = s.payout_id
+       LEFT JOIN risk_assessments r
+         ON r.risk_assessment_id = (
+           SELECT r2.risk_assessment_id
+           FROM risk_assessments r2
+           WHERE r2.payment_id = p.payment_id
+           ORDER BY r2.created_at DESC
+           LIMIT 1
+         )
        WHERE p.merchant_id = ?
        ORDER BY p.created_at DESC`,
       [req.merchantId]
@@ -695,6 +571,66 @@ app.get('/api/dashboard/payments', authenticateToken, async (req, res) => {
   }
 })
 
-// ── Start the background settlement worker ──
-import { startSettlementWorker } from './services/settlementWorker.js'
+app.get('/api/dashboard/settlements', authenticateToken, async (req, res) => {
+  try {
+    const [rows] = await pool.query(
+      `SELECT
+         s.*,
+         p.payment_reference,
+         p.amount_sgd,
+         p.crypto_symbol_snapshot,
+         p.network_snapshot,
+         p.expected_crypto_amount,
+         p.received_crypto_amount,
+         p.status AS payment_status,
+         p.created_at AS payment_created_at,
+         mp.payout_reference,
+         mp.provider_reference AS payout_provider_reference,
+         mp.status AS payout_status,
+         mp.paid_out_at
+       FROM settlements s
+       JOIN payments p ON p.payment_id = s.payment_id
+       LEFT JOIN merchant_payouts mp ON mp.payout_id = s.payout_id
+       WHERE s.merchant_id = ? AND p.merchant_id = ?
+       ORDER BY COALESCE(s.settled_at, s.converted_at, s.created_at) DESC`,
+      [req.merchantId, req.merchantId]
+    )
+    res.json({ settlements: rows })
+  } catch (err) {
+    console.error('Fetch dashboard settlements error:', err)
+    res.status(500).json({ error: 'Internal server error' })
+  }
+})
+
+const settlementJobAuth = (req, res, next) => {
+  if (!env.settlementJobSecret) return next()
+
+  const authHeader = req.headers.authorization || ''
+  const token = authHeader.startsWith('Bearer ') ? authHeader.slice('Bearer '.length).trim() : ''
+  if (token && token === env.settlementJobSecret) return next()
+
+  return res.status(401).json({ error: 'Unauthorized settlement job trigger' })
+}
+
+app.post('/api/settlements/run-t1', settlementJobAuth, async (req, res) => {
+  try {
+    const result = await runDailyMerchantSettlements({
+      settlementDate: req.body?.settlementDate,
+    })
+    res.json({
+      ok: true,
+      settlementType: req.body?.settlementType || 'T_PLUS_1',
+      trigger: req.body?.trigger || 'manual',
+      ...result,
+      processedAt: new Date().toISOString(),
+    })
+  } catch (err) {
+    console.error('Run T+1 settlement error:', err)
+    res.status(500).json({ error: 'Internal server error' })
+  }
+})
+
+await ensureMainSchema()
+await ensureRiskSchema()
+await ensureKycSchema()
 startSettlementWorker()

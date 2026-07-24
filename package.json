@@ -38,10 +38,12 @@
     "motion": "^12.38.0",
     "mysql2": "^3.22.5",
     "nationid": "^2.2.1",
+    "node-cron": "^4.6.0",
     "qrcode": "^1.5.4",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "react-router-dom": "^7.14.2",
+    "stripe": "^22.3.2",
     "uuid": "^13.0.0"
   }
 }

@@ -1,34 +1,51 @@
 import pool from '../config/db.js'
+import cron from 'node-cron'
 import {
   createOrUpdateConvertedSettlement,
-  createPayoutBatchesForPendingSettlements,
-  finalizeProcessingPayouts,
   insertSettlementAuditLog,
-  markConvertedSettlementsPending,
+  runDailyMerchantSettlements,
 } from './settlementService.js'
 
 let intervalId = null
+let cronTask = null
 
 export function startSettlementWorker() {
   if (intervalId) return
-  console.log('Settlement worker started; running every 5 seconds.')
+  console.log('Payment verification worker started; running every 5 seconds.')
   intervalId = setInterval(processPendingPayments, 5000)
+
+  if (!cronTask) {
+    cronTask = cron.schedule(
+      '0 2 * * *',
+      async () => {
+        try {
+          const result = await runDailyMerchantSettlements()
+          console.log(`T+1 settlement completed for ${result.settlementDate}. Transfers: ${result.transfers.length}.`)
+        } catch (error) {
+          console.error('Daily T+1 settlement failed:', error)
+        }
+      },
+      { timezone: 'Asia/Singapore' },
+    )
+    console.log('T+1 settlement scheduler started; running daily at 2:00 AM Asia/Singapore.')
+  }
 }
 
 export function stopSettlementWorker() {
   if (!intervalId) return
   clearInterval(intervalId)
   intervalId = null
-  console.log('Settlement worker stopped.')
+  if (cronTask) {
+    cronTask.stop()
+    cronTask = null
+  }
+  console.log('Payment verification worker stopped.')
 }
 
 async function processPendingPayments() {
   try {
     await confirmDetectedTransactions()
     await convertConfirmedPayments()
-    await markConvertedSettlementsPending()
-    await createPayoutBatchesForPendingSettlements()
-    await finalizeProcessingPayouts()
   } catch (err) {
     console.error('Error in settlement worker process:', err)
   }

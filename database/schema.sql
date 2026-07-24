@@ -9,11 +9,13 @@ SET FOREIGN_KEY_CHECKS = 0;
 
 DROP TABLE IF EXISTS `audit_logs`;
 DROP TABLE IF EXISTS `settlements`;
+DROP TABLE IF EXISTS `crypto_conversions`;
 DROP TABLE IF EXISTS `blockchain_transactions`;
 DROP TABLE IF EXISTS `payments`;
 DROP TABLE IF EXISTS `merchant_payouts`;
 DROP TABLE IF EXISTS `kyc_submissions`;
 DROP TABLE IF EXISTS `supported_assets`;
+DROP TABLE IF EXISTS `admin_users`;
 DROP TABLE IF EXISTS `merchants`;
 
 SET FOREIGN_KEY_CHECKS = 1;
@@ -34,6 +36,15 @@ CREATE TABLE `merchants` (
   `email_verified_at` timestamp NULL DEFAULT NULL,
   `container_id` varchar(64) DEFAULT NULL,
   `wallet_id` varchar(64) DEFAULT NULL,
+  `stripe_connected_account_id` varchar(128) DEFAULT NULL,
+  `stripe_onboarding_status` varchar(40) NOT NULL DEFAULT 'NOT_STARTED',
+  `stripe_details_submitted` tinyint(1) NOT NULL DEFAULT 0,
+  `stripe_payouts_enabled` tinyint(1) NOT NULL DEFAULT 0,
+  `stripe_charges_enabled` tinyint(1) NOT NULL DEFAULT 0,
+  `stripe_requirements_currently_due` json DEFAULT NULL,
+  `stripe_requirements_disabled_reason` varchar(255) DEFAULT NULL,
+  `stripe_status_synced_at` timestamp NULL DEFAULT NULL,
+  `payout_enabled` tinyint(1) NOT NULL DEFAULT 1,
   `onboarded_at` timestamp NULL DEFAULT NULL,
   `kyc_status` enum('PENDING','APPROVED','REJECTED','MANUAL_REVIEW') NOT NULL DEFAULT 'PENDING',
   `status` enum('ACTIVE_UNVERIFIED','ACTIVE_ONBOARDED','SUSPENDED','CLOSED') NOT NULL DEFAULT 'ACTIVE_UNVERIFIED',
@@ -47,42 +58,58 @@ CREATE TABLE `merchants` (
   KEY `idx_merchants_email_verification_token` (`email_verification_token`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- KYB (Know Your Business) submissions for merchant onboarding verification.
--- Stores all data collected during the KYB form, plus n8n workflow results.
--- Each merchant can have one KYB submission. The n8n compliance workflow
--- processes the submission and calls back with screening results + decision.
+CREATE TABLE `admin_users` (
+  `admin_user_id` int unsigned NOT NULL AUTO_INCREMENT,
+  `email` varchar(150) NOT NULL,
+  `password_hash` varchar(255) NOT NULL,
+  `full_name` varchar(255) NOT NULL,
+  `role` varchar(40) NOT NULL DEFAULT 'SUPER_ADMIN',
+  `status` varchar(40) NOT NULL DEFAULT 'ACTIVE',
+  `last_login_at` timestamp NULL DEFAULT NULL,
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`admin_user_id`),
+  UNIQUE KEY `uq_admin_users_email` (`email`),
+  KEY `idx_admin_users_status` (`status`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE `merchant_fee_profiles` (
+  `merchant_id` varchar(36) NOT NULL,
+  `platform_fee_rate` decimal(8,6) NOT NULL DEFAULT '0.015000',
+  `maximum_total_rate` decimal(8,6) NOT NULL DEFAULT '0.030000',
+  `settlement_delay_days` int NOT NULL DEFAULT 1,
+  `settlement_currency` varchar(3) NOT NULL DEFAULT 'SGD',
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`merchant_id`),
+  CONSTRAINT `fk_merchant_fee_profiles_merchants` FOREIGN KEY (`merchant_id`) REFERENCES `merchants` (`merchant_id`) ON DELETE CASCADE ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE `kyc_submissions` (
   `kyc_submission_id` varchar(36) NOT NULL,
   `merchant_id` varchar(36) NOT NULL,
-  -- Business details (supplements what's already in merchants table)
   `business_type` enum('SOLE_PROPRIETOR','PARTNERSHIP','PRIVATE_LIMITED','LLP') NOT NULL,
   `industry_sector` varchar(100) NOT NULL,
   `registered_address` text NOT NULL,
   `website_url` varchar(255) DEFAULT NULL,
   `sales_channel` varchar(100) DEFAULT NULL,
-  -- Ownership (UBO — Ultimate Beneficial Owner)
   `shareholder_count` int unsigned DEFAULT NULL,
   `has_ubo_above_25` tinyint(1) NOT NULL DEFAULT 0,
   `ubo_full_name` varchar(255) DEFAULT NULL,
-  -- Authorized representative
   `rep_full_name` varchar(255) NOT NULL,
   `rep_designation` varchar(100) NOT NULL,
   `rep_contact_number` varchar(20) NOT NULL,
-  -- Compliance declarations
   `monthly_volume_tier` enum('BELOW_10K','10K_50K','50K_200K','ABOVE_200K') NOT NULL,
   `source_of_funds` varchar(100) DEFAULT NULL,
-  `pep_declaration` tinyint(1) NOT NULL DEFAULT 0,  -- 0 = not a PEP
+  `pep_declaration` tinyint(1) NOT NULL DEFAULT 0,
   `terms_accepted` tinyint(1) NOT NULL DEFAULT 0,
   `info_accurate_declaration` tinyint(1) NOT NULL DEFAULT 0,
-  -- Simulated ACRA verification (populated by n8n workflow)
   `acra_verified` tinyint(1) NOT NULL DEFAULT 0,
   `acra_verification_ref` varchar(64) DEFAULT NULL,
-  -- n8n workflow tracking
   `n8n_execution_id` varchar(128) DEFAULT NULL,
   `risk_score` int DEFAULT NULL,
   `risk_tier` enum('LOW','MEDIUM','HIGH') DEFAULT NULL,
   `screening_results` json DEFAULT NULL,
-  -- Status tracking
   `status` enum('SUBMITTED','UNDER_REVIEW','APPROVED','REJECTED','MANUAL_REVIEW') NOT NULL DEFAULT 'SUBMITTED',
   `reviewer_notes` text DEFAULT NULL,
   `submitted_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -92,8 +119,7 @@ CREATE TABLE `kyc_submissions` (
   PRIMARY KEY (`kyc_submission_id`),
   KEY `idx_kyc_merchant` (`merchant_id`),
   KEY `idx_kyc_status` (`status`),
-  CONSTRAINT `fk_kyc_merchants` FOREIGN KEY (`merchant_id`)
-    REFERENCES `merchants` (`merchant_id`) ON DELETE RESTRICT ON UPDATE CASCADE
+  CONSTRAINT `fk_kyc_merchants` FOREIGN KEY (`merchant_id`) REFERENCES `merchants` (`merchant_id`) ON DELETE RESTRICT ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE `supported_assets` (
@@ -131,7 +157,10 @@ CREATE TABLE `merchant_payouts` (
   `bank_account_last4` varchar(4) DEFAULT NULL,
   `provider_name` varchar(100) NOT NULL DEFAULT 'MOCK_MAS_LICENSED_PROVIDER',
   `provider_reference` varchar(128) DEFAULT NULL,
-  `status` enum('NOT_READY','PENDING_APPROVAL','PROCESSING','PAID_OUT','FAILED','CANCELLED') NOT NULL DEFAULT 'NOT_READY',
+  `stripe_transfer_id` varchar(128) DEFAULT NULL,
+  `stripe_payout_id` varchar(128) DEFAULT NULL,
+  `idempotency_key` varchar(128) DEFAULT NULL,
+  `status` enum('NOT_READY','PENDING_APPROVAL','PROCESSING','TRANSFERRED','PAID_OUT','FAILED','CANCELLED') NOT NULL DEFAULT 'NOT_READY',
   `requested_at` timestamp NULL DEFAULT NULL,
   `processing_started_at` timestamp NULL DEFAULT NULL,
   `paid_out_at` timestamp NULL DEFAULT NULL,
@@ -141,6 +170,7 @@ CREATE TABLE `merchant_payouts` (
   `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (`payout_id`),
   UNIQUE KEY `uq_merchant_payouts_reference` (`payout_reference`),
+  UNIQUE KEY `uq_merchant_payouts_idempotency` (`idempotency_key`),
   KEY `idx_merchant_payouts_merchant_status` (`merchant_id`, `status`),
   KEY `idx_merchant_payouts_created_at` (`created_at`),
   CONSTRAINT `fk_merchant_payouts_merchants` FOREIGN KEY (`merchant_id`) REFERENCES `merchants` (`merchant_id`) ON DELETE RESTRICT ON UPDATE CASCADE,
@@ -251,6 +281,37 @@ CREATE TABLE `blockchain_transactions` (
   CONSTRAINT `chk_blockchain_transactions_confirmations_valid` CHECK (`confirmations` <= 4294967295)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+CREATE TABLE `crypto_conversions` (
+  `conversion_id` varchar(36) NOT NULL,
+  `payment_id` varchar(36) NOT NULL,
+  `merchant_id` varchar(36) NOT NULL,
+  `crypto_currency` varchar(32) NOT NULL DEFAULT 'ETH',
+  `crypto_amount` decimal(36,18) NOT NULL DEFAULT '0.000000000000000000',
+  `fiat_currency` varchar(8) NOT NULL DEFAULT 'SGD',
+  `quoted_fiat_amount` decimal(12,2) NOT NULL DEFAULT '0.00',
+  `quote_exchange_rate` decimal(36,18) DEFAULT NULL,
+  `conversion_exchange_rate` decimal(36,18) DEFAULT NULL,
+  `actual_fiat_proceeds` decimal(12,2) DEFAULT NULL,
+  `conversion_gain_loss` decimal(12,2) DEFAULT NULL,
+  `rate_source` varchar(100) NOT NULL DEFAULT 'Coingecko ETH/SGD',
+  `faucet_return_address` varchar(128) DEFAULT NULL,
+  `faucet_return_tx_hash` varchar(128) DEFAULT NULL,
+  `returned_amount` decimal(36,18) DEFAULT NULL,
+  `returned_at` timestamp NULL DEFAULT NULL,
+  `status` enum('PENDING','CONVERSION_PROCESSING','RETURN_SUBMITTED','RETURN_CONFIRMED','CONVERTED','FAILED') NOT NULL DEFAULT 'PENDING',
+  `converted_at` timestamp NULL DEFAULT NULL,
+  `failure_reason` varchar(255) DEFAULT NULL,
+  `retry_count` int unsigned NOT NULL DEFAULT 0,
+  `last_retry_at` timestamp NULL DEFAULT NULL,
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`conversion_id`),
+  UNIQUE KEY `uq_crypto_conversions_payment` (`payment_id`),
+  KEY `idx_crypto_conversions_merchant_status` (`merchant_id`, `status`),
+  CONSTRAINT `fk_crypto_conversions_payments` FOREIGN KEY (`payment_id`) REFERENCES `payments` (`payment_id`) ON DELETE RESTRICT ON UPDATE CASCADE,
+  CONSTRAINT `fk_crypto_conversions_merchants` FOREIGN KEY (`merchant_id`) REFERENCES `merchants` (`merchant_id`) ON DELETE RESTRICT ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE `settlements` (
   `settlement_id` varchar(36) NOT NULL,
   `payment_id` varchar(36) NOT NULL,
@@ -259,11 +320,15 @@ CREATE TABLE `settlements` (
   `gross_sgd_amount` decimal(12,2) NOT NULL,
   `provider_fee_sgd` decimal(12,2) NOT NULL DEFAULT '0.00',
   `platform_fee_sgd` decimal(12,2) NOT NULL DEFAULT '0.00',
+  `conversion_cost_sgd` decimal(12,2) NOT NULL DEFAULT '0.00',
+  `network_fee_sgd` decimal(12,2) NOT NULL DEFAULT '0.00',
+  `buffer_reserved_sgd` decimal(12,2) NOT NULL DEFAULT '0.00',
+  `buffer_released_sgd` decimal(12,2) NOT NULL DEFAULT '0.00',
   `net_settlement_sgd_amount` decimal(12,2) NOT NULL,
   `conversion_rate` decimal(36,18) DEFAULT NULL,
   `provider_name` varchar(100) NOT NULL DEFAULT 'MOCK_MAS_LICENSED_PROVIDER',
   `provider_reference` varchar(128) DEFAULT NULL,
-  `status` enum('PENDING_CONVERSION','CONVERTED_TO_SGD','SETTLEMENT_PENDING','SETTLED','PAID_OUT','FAILED','MANUAL_REVIEW_REQUIRED') NOT NULL DEFAULT 'PENDING_CONVERSION',
+  `status` enum('PENDING_CONVERSION','CONVERTED_TO_SGD','ELIGIBLE','PROCESSING','TRANSFERRED','HELD','SETTLED','PAID_OUT','FAILED','MANUAL_REVIEW_REQUIRED') NOT NULL DEFAULT 'PENDING_CONVERSION',
   `converted_at` timestamp NULL DEFAULT NULL,
   `settled_at` timestamp NULL DEFAULT NULL,
   `paid_out_at` timestamp NULL DEFAULT NULL,
@@ -283,6 +348,30 @@ CREATE TABLE `settlements` (
   CONSTRAINT `chk_settlements_provider_fee_nonnegative` CHECK (`provider_fee_sgd` >= 0),
   CONSTRAINT `chk_settlements_platform_fee_nonnegative` CHECK (`platform_fee_sgd` >= 0),
   CONSTRAINT `chk_settlements_net_nonnegative` CHECK (`net_settlement_sgd_amount` >= 0)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE `settlement_batches` (
+  `id` bigint unsigned NOT NULL AUTO_INCREMENT,
+  `merchant_id` varchar(36) NOT NULL,
+  `settlement_date` date NOT NULL,
+  `gross_amount_cents` bigint NOT NULL,
+  `platform_fee_cents` bigint NOT NULL,
+  `conversion_cost_cents` bigint NOT NULL DEFAULT 0,
+  `network_fee_cents` bigint NOT NULL DEFAULT 0,
+  `buffer_reserved_cents` bigint NOT NULL DEFAULT 0,
+  `buffer_released_cents` bigint NOT NULL DEFAULT 0,
+  `absorbed_by_chainforge_cents` bigint NOT NULL DEFAULT 0,
+  `net_amount_cents` bigint NOT NULL,
+  `stripe_transfer_id` varchar(255) DEFAULT NULL,
+  `status` varchar(30) NOT NULL DEFAULT 'PENDING',
+  `failure_reason` text DEFAULT NULL,
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `completed_at` timestamp NULL DEFAULT NULL,
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_settlement_batches_merchant_date` (`merchant_id`, `settlement_date`),
+  KEY `idx_settlement_batches_status` (`status`),
+  CONSTRAINT `fk_settlement_batches_merchants` FOREIGN KEY (`merchant_id`) REFERENCES `merchants` (`merchant_id`) ON DELETE RESTRICT ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE `audit_logs` (

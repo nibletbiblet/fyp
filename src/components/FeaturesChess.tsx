@@ -46,7 +46,7 @@ export default function FeaturesChess() {
           <span className="mono-amber">// CAPABILITIES</span>
           <span className="mono hidden sm:block">PROTOCOL FEATURES</span>
         </div>
-        <span className="mono">v2.0.0-mainnet</span>
+        <span className="mono">v2.0.0-testnet</span>
       </div>
 
       {/* Feature rows */}

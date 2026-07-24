@@ -17,7 +17,7 @@ const randomHex = (len: number) =>
 const BOOT_SEQUENCE: Array<{ delay: number; prefix: LogLine['prefix']; text: string }> = [
   { delay: 0,    prefix: 'INFO', text: 'Initializing ChainForge runtime…' },
   { delay: 320,  prefix: 'INFO', text: 'Loading cryptographic primitives (secp256k1, keccak256)' },
-  { delay: 640,  prefix: 'OK',   text: 'EVM executor loaded — version 2.0.0-mainnet' },
+  { delay: 640,  prefix: 'OK',   text: 'EVM executor loaded — version 2.0.0-testnet' },
   { delay: 900,  prefix: 'WAIT', text: 'Connecting to peer network…' },
   { delay: 1300, prefix: 'OK',   text: 'Discovered 14,892 validators' },
   { delay: 1600, prefix: 'INFO', text: 'Syncing chain state from block #21,844,291' },
@@ -367,7 +367,7 @@ export default function LoadingScreen({ onComplete }: LoadingScreenProps) {
               <div className="flex-1 overflow-y-auto px-6 py-4 font-mono-custom text-[11px] leading-7">
                 {/* Static header */}
                 <div style={{ color: 'rgba(255,255,255,0.12)' }} className="mb-3">
-                  {`ChainForge Runtime v2.0.0-mainnet (linux/amd64)`}<br />
+                  {`ChainForge Runtime v2.0.0-testnet (linux/amd64)`}<br />
                   {`Copyright (c) 2026 ChainForge Labs. All rights reserved.`}<br />
                   {`─`.repeat(52)}
                 </div>
@@ -441,7 +441,7 @@ export default function LoadingScreen({ onComplete }: LoadingScreenProps) {
             style={{ borderTop: '1px solid rgba(255,255,255,0.06)', background: 'var(--bg-raised)' }}
           >
             <span className="font-mono-custom text-[9px]" style={{ color: 'var(--text-muted)' }}>
-              NETWORK: ETHEREUM MAINNET · CHAIN ID: 1 · RPC: wss://rpc.chainforge.io
+              NETWORK: ETHEREUM SEPOLIA TESTNET / CHAIN ID: 11155111 / SANDBOX MODE
             </span>
             <span className="font-mono-custom text-[9px]" style={{ color: progress >= 100 ? '#22c55e' : 'var(--amber)' }}>
               {progress >= 100 ? '● READY' : '● BOOTING'}

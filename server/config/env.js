@@ -55,7 +55,20 @@ export const env = {
     ethSgdRate: Number.parseFloat(process.env.MOCK_ETH_SGD_RATE ?? '4500'),
     stablecoinSgdRate: Number.parseFloat(process.env.MOCK_STABLECOIN_SGD_RATE ?? '1.35'),
   },
-  jwtSecret: process.env.JWT_SECRET ?? 'dev-jwt-secret-change-in-production',
-  encryptionKey: process.env.ENCRYPTION_KEY ?? '0000000000000000000000000000000000000000000000000000000000000000',
+  settlementJobSecret: process.env.SETTLEMENT_JOB_SECRET ?? '',
+  stripe: {
+    secretKey: process.env.STRIPE_SECRET_KEY ?? '',
+    webhookSecret: process.env.STRIPE_WEBHOOK_SECRET ?? '',
+    connectCountry: process.env.STRIPE_CONNECT_COUNTRY ?? 'SG',
+  },
+  admin: {
+    email: process.env.ADMIN_EMAIL ?? 'admin@chainforge.local',
+    password: process.env.ADMIN_PASSWORD ?? (process.env.NODE_ENV === 'production' ? '' : 'Admin@123456'),
+    fullName: process.env.ADMIN_FULL_NAME ?? 'Platform Admin',
+  },
+  n8n: {
+    callbackSecret: process.env.N8N_CALLBACK_SECRET ?? '',
+  },
+  jwtSecret: required('JWT_SECRET'),
+  encryptionKey: requiredHex('ENCRYPTION_KEY', 32),
 }
-

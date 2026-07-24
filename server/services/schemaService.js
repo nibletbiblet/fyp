@@ -1,4 +1,6 @@
+import bcrypt from 'bcrypt'
 import pool from '../config/db.js'
+import { env } from '../config/env.js'
 
 const tableExists = async (tableName) => {
   const [rows] = await pool.query(
@@ -18,6 +20,17 @@ const columnExists = async (tableName, columnName) => {
     [tableName, columnName]
   )
   return Number(rows[0]?.count || 0) > 0
+}
+
+const getColumnSqlType = async (tableName, columnName) => {
+  const [rows] = await pool.query(
+    `SELECT COLUMN_TYPE AS column_type
+     FROM information_schema.columns
+     WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ?
+     LIMIT 1`,
+    [tableName, columnName]
+  )
+  return rows[0]?.column_type ? String(rows[0].column_type).toUpperCase() : null
 }
 
 const getLegacyTableName = async (baseName) => {
@@ -48,6 +61,12 @@ const addColumnIfMissing = async (tableName, columnName, definition) => {
   await pool.query(`ALTER TABLE \`${tableName}\` ADD COLUMN ${definition}`)
 }
 
+const renameColumnIfNeeded = async (tableName, oldColumnName, newColumnName, definition) => {
+  if (!(await tableExists(tableName))) return
+  if (!(await columnExists(tableName, oldColumnName)) || await columnExists(tableName, newColumnName)) return
+  await pool.query(`ALTER TABLE \`${tableName}\` CHANGE COLUMN \`${oldColumnName}\` \`${newColumnName}\` ${definition}`)
+}
+
 const createCoreTables = async () => {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS merchants (
@@ -60,8 +79,17 @@ const createCoreTables = async () => {
       bank_account_label VARCHAR(64) DEFAULT NULL,
       status VARCHAR(40) NOT NULL DEFAULT 'ACTIVE_UNVERIFIED',
       kyc_status VARCHAR(40) NOT NULL DEFAULT 'PENDING',
-      triplea_merchant_id VARCHAR(64) DEFAULT NULL,
-      triplea_wallet_id VARCHAR(64) DEFAULT NULL,
+      container_id VARCHAR(64) DEFAULT NULL,
+      wallet_id VARCHAR(64) DEFAULT NULL,
+      stripe_connected_account_id VARCHAR(128) DEFAULT NULL,
+      stripe_onboarding_status VARCHAR(40) NOT NULL DEFAULT 'NOT_STARTED',
+      stripe_details_submitted TINYINT(1) NOT NULL DEFAULT 0,
+      stripe_payouts_enabled TINYINT(1) NOT NULL DEFAULT 0,
+      stripe_charges_enabled TINYINT(1) NOT NULL DEFAULT 0,
+      stripe_requirements_currently_due JSON DEFAULT NULL,
+      stripe_requirements_disabled_reason VARCHAR(255) DEFAULT NULL,
+      stripe_status_synced_at TIMESTAMP NULL DEFAULT NULL,
+      payout_enabled TINYINT(1) NOT NULL DEFAULT 1,
       created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
       PRIMARY KEY (id),
@@ -88,6 +116,41 @@ const createCoreTables = async () => {
       CONSTRAINT fk_merchant_users_merchants
         FOREIGN KEY (merchant_id) REFERENCES merchants (id)
         ON DELETE CASCADE ON UPDATE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `)
+
+  const merchantIdSqlType = await getColumnSqlType('merchants', 'id') || 'INT'
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS merchant_fee_profiles (
+      merchant_id ${merchantIdSqlType} NOT NULL,
+      platform_fee_rate DECIMAL(8,6) NOT NULL DEFAULT 0.015000,
+      maximum_total_rate DECIMAL(8,6) NOT NULL DEFAULT 0.030000,
+      settlement_delay_days INT NOT NULL DEFAULT 1,
+      settlement_currency VARCHAR(3) NOT NULL DEFAULT 'SGD',
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (merchant_id),
+      CONSTRAINT fk_merchant_fee_profiles_merchants
+        FOREIGN KEY (merchant_id) REFERENCES merchants (id)
+        ON DELETE CASCADE ON UPDATE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `)
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS admin_users (
+      admin_user_id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+      email VARCHAR(150) NOT NULL,
+      password_hash VARCHAR(255) NOT NULL,
+      full_name VARCHAR(255) NOT NULL,
+      role VARCHAR(40) NOT NULL DEFAULT 'SUPER_ADMIN',
+      status VARCHAR(40) NOT NULL DEFAULT 'ACTIVE',
+      last_login_at TIMESTAMP NULL DEFAULT NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (admin_user_id),
+      UNIQUE KEY uq_admin_users_email (email),
+      KEY idx_admin_users_status (status)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `)
 
@@ -209,6 +272,9 @@ const createCoreTables = async () => {
       bank_account_last4 VARCHAR(4) DEFAULT NULL,
       provider_name VARCHAR(100) NOT NULL DEFAULT 'MOCK_MAS_LICENSED_PROVIDER',
       provider_reference VARCHAR(128) DEFAULT NULL,
+      stripe_transfer_id VARCHAR(128) DEFAULT NULL,
+      stripe_payout_id VARCHAR(128) DEFAULT NULL,
+      idempotency_key VARCHAR(128) DEFAULT NULL,
       status VARCHAR(40) NOT NULL DEFAULT 'NOT_READY',
       requested_at TIMESTAMP NULL DEFAULT NULL,
       processing_started_at TIMESTAMP NULL DEFAULT NULL,
@@ -219,8 +285,46 @@ const createCoreTables = async () => {
       updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
       PRIMARY KEY (payout_id),
       UNIQUE KEY uq_merchant_payouts_reference (payout_reference),
+      UNIQUE KEY uq_merchant_payouts_idempotency (idempotency_key),
       KEY idx_merchant_payouts_merchant_status (merchant_id, status),
       CONSTRAINT fk_merchant_payouts_merchants
+        FOREIGN KEY (merchant_id) REFERENCES merchants (id)
+        ON DELETE RESTRICT ON UPDATE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `)
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS crypto_conversions (
+      conversion_id VARCHAR(36) NOT NULL,
+      payment_id VARCHAR(36) NOT NULL,
+      merchant_id ${merchantIdSqlType} NOT NULL,
+      crypto_currency VARCHAR(32) NOT NULL DEFAULT 'ETH',
+      crypto_amount DECIMAL(36,18) NOT NULL DEFAULT 0,
+      fiat_currency VARCHAR(8) NOT NULL DEFAULT 'SGD',
+      quoted_fiat_amount DECIMAL(12,2) NOT NULL DEFAULT 0,
+      quote_exchange_rate DECIMAL(36,18) DEFAULT NULL,
+      conversion_exchange_rate DECIMAL(36,18) DEFAULT NULL,
+      actual_fiat_proceeds DECIMAL(12,2) DEFAULT NULL,
+      conversion_gain_loss DECIMAL(12,2) DEFAULT NULL,
+      rate_source VARCHAR(100) NOT NULL DEFAULT 'Coingecko ETH/SGD',
+      faucet_return_address VARCHAR(128) DEFAULT NULL,
+      faucet_return_tx_hash VARCHAR(128) DEFAULT NULL,
+      returned_amount DECIMAL(36,18) DEFAULT NULL,
+      returned_at TIMESTAMP NULL DEFAULT NULL,
+      status VARCHAR(40) NOT NULL DEFAULT 'PENDING',
+      converted_at TIMESTAMP NULL DEFAULT NULL,
+      failure_reason VARCHAR(255) DEFAULT NULL,
+      retry_count INT UNSIGNED NOT NULL DEFAULT 0,
+      last_retry_at TIMESTAMP NULL DEFAULT NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (conversion_id),
+      UNIQUE KEY uq_crypto_conversions_payment (payment_id),
+      KEY idx_crypto_conversions_merchant_status (merchant_id, status),
+      CONSTRAINT fk_crypto_conversions_payments
+        FOREIGN KEY (payment_id) REFERENCES payments (payment_id)
+        ON DELETE RESTRICT ON UPDATE CASCADE,
+      CONSTRAINT fk_crypto_conversions_merchants
         FOREIGN KEY (merchant_id) REFERENCES merchants (id)
         ON DELETE RESTRICT ON UPDATE CASCADE
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
@@ -235,6 +339,10 @@ const createCoreTables = async () => {
       gross_sgd_amount DECIMAL(12,2) NOT NULL,
       provider_fee_sgd DECIMAL(12,2) NOT NULL DEFAULT 0,
       platform_fee_sgd DECIMAL(12,2) NOT NULL DEFAULT 0,
+      conversion_cost_sgd DECIMAL(12,2) NOT NULL DEFAULT 0,
+      network_fee_sgd DECIMAL(12,2) NOT NULL DEFAULT 0,
+      buffer_reserved_sgd DECIMAL(12,2) NOT NULL DEFAULT 0,
+      buffer_released_sgd DECIMAL(12,2) NOT NULL DEFAULT 0,
       net_settlement_sgd_amount DECIMAL(12,2) NOT NULL,
       conversion_rate DECIMAL(36,18) DEFAULT NULL,
       provider_name VARCHAR(100) NOT NULL DEFAULT 'MOCK_MAS_LICENSED_PROVIDER',
@@ -260,6 +368,34 @@ const createCoreTables = async () => {
       CONSTRAINT fk_settlements_merchant_payouts
         FOREIGN KEY (payout_id) REFERENCES merchant_payouts (payout_id)
         ON DELETE SET NULL ON UPDATE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `)
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS settlement_batches (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      merchant_id ${merchantIdSqlType} NOT NULL,
+      settlement_date DATE NOT NULL,
+      gross_amount_cents BIGINT NOT NULL,
+      platform_fee_cents BIGINT NOT NULL,
+      conversion_cost_cents BIGINT NOT NULL DEFAULT 0,
+      network_fee_cents BIGINT NOT NULL DEFAULT 0,
+      buffer_reserved_cents BIGINT NOT NULL DEFAULT 0,
+      buffer_released_cents BIGINT NOT NULL DEFAULT 0,
+      absorbed_by_chainforge_cents BIGINT NOT NULL DEFAULT 0,
+      net_amount_cents BIGINT NOT NULL,
+      stripe_transfer_id VARCHAR(255) DEFAULT NULL,
+      status VARCHAR(30) NOT NULL DEFAULT 'PENDING',
+      failure_reason TEXT DEFAULT NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      completed_at TIMESTAMP NULL DEFAULT NULL,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      UNIQUE KEY uq_settlement_batches_merchant_date (merchant_id, settlement_date),
+      KEY idx_settlement_batches_status (status),
+      CONSTRAINT fk_settlement_batches_merchants
+        FOREIGN KEY (merchant_id) REFERENCES merchants (id)
+        ON DELETE RESTRICT ON UPDATE CASCADE
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `)
 
@@ -308,7 +444,27 @@ const seedSupportedAssets = async () => {
 }
 
 const migrateCoreTables = async () => {
+  await renameColumnIfNeeded('merchants', 'triplea_merchant_id', 'container_id', 'VARCHAR(64) DEFAULT NULL')
+  await renameColumnIfNeeded('merchants', 'triplea_wallet_id', 'wallet_id', 'VARCHAR(64) DEFAULT NULL')
+  await addColumnIfMissing('merchants', 'container_id', '`container_id` VARCHAR(64) DEFAULT NULL AFTER `kyc_status`')
+  await addColumnIfMissing('merchants', 'wallet_id', '`wallet_id` VARCHAR(64) DEFAULT NULL AFTER `container_id`')
+  await addColumnIfMissing('merchants', 'stripe_connected_account_id', '`stripe_connected_account_id` VARCHAR(128) DEFAULT NULL AFTER `wallet_id`')
+  await addColumnIfMissing('merchants', 'stripe_onboarding_status', "`stripe_onboarding_status` VARCHAR(40) NOT NULL DEFAULT 'NOT_STARTED' AFTER `stripe_connected_account_id`")
+  await addColumnIfMissing('merchants', 'stripe_details_submitted', '`stripe_details_submitted` TINYINT(1) NOT NULL DEFAULT 0 AFTER `stripe_onboarding_status`')
+  await addColumnIfMissing('merchants', 'stripe_payouts_enabled', '`stripe_payouts_enabled` TINYINT(1) NOT NULL DEFAULT 0 AFTER `stripe_details_submitted`')
+  await addColumnIfMissing('merchants', 'stripe_charges_enabled', '`stripe_charges_enabled` TINYINT(1) NOT NULL DEFAULT 0 AFTER `stripe_payouts_enabled`')
+  await addColumnIfMissing('merchants', 'stripe_requirements_currently_due', '`stripe_requirements_currently_due` JSON DEFAULT NULL AFTER `stripe_charges_enabled`')
+  await addColumnIfMissing('merchants', 'stripe_requirements_disabled_reason', '`stripe_requirements_disabled_reason` VARCHAR(255) DEFAULT NULL AFTER `stripe_requirements_currently_due`')
+  await addColumnIfMissing('merchants', 'stripe_status_synced_at', '`stripe_status_synced_at` TIMESTAMP NULL DEFAULT NULL AFTER `stripe_requirements_disabled_reason`')
+  await addColumnIfMissing('merchants', 'payout_enabled', '`payout_enabled` TINYINT(1) NOT NULL DEFAULT 1 AFTER `stripe_status_synced_at`')
+  await addColumnIfMissing('merchant_payouts', 'stripe_transfer_id', '`stripe_transfer_id` VARCHAR(128) DEFAULT NULL AFTER `provider_reference`')
+  await addColumnIfMissing('merchant_payouts', 'stripe_payout_id', '`stripe_payout_id` VARCHAR(128) DEFAULT NULL AFTER `stripe_transfer_id`')
+  await addColumnIfMissing('merchant_payouts', 'idempotency_key', '`idempotency_key` VARCHAR(128) DEFAULT NULL AFTER `stripe_payout_id`')
   await addColumnIfMissing('settlements', 'paid_out_at', '`paid_out_at` TIMESTAMP NULL DEFAULT NULL AFTER `settled_at`')
+  await addColumnIfMissing('settlements', 'conversion_cost_sgd', '`conversion_cost_sgd` DECIMAL(12,2) NOT NULL DEFAULT 0 AFTER `platform_fee_sgd`')
+  await addColumnIfMissing('settlements', 'network_fee_sgd', '`network_fee_sgd` DECIMAL(12,2) NOT NULL DEFAULT 0 AFTER `conversion_cost_sgd`')
+  await addColumnIfMissing('settlements', 'buffer_reserved_sgd', '`buffer_reserved_sgd` DECIMAL(12,2) NOT NULL DEFAULT 0 AFTER `network_fee_sgd`')
+  await addColumnIfMissing('settlements', 'buffer_released_sgd', '`buffer_released_sgd` DECIMAL(12,2) NOT NULL DEFAULT 0 AFTER `buffer_reserved_sgd`')
   if (await tableExists('settlements')) {
     await pool.query(
       `ALTER TABLE settlements
@@ -321,19 +477,73 @@ const migrateCoreTables = async () => {
        MODIFY COLUMN status VARCHAR(40) NOT NULL DEFAULT 'CREATED'`,
     )
   }
+  if (await tableExists('merchant_payouts')) {
+    await pool.query(
+      `ALTER TABLE merchant_payouts
+       MODIFY COLUMN status VARCHAR(40) NOT NULL DEFAULT 'NOT_READY'`,
+    )
+  }
+  if (await tableExists('merchant_fee_profiles') && await tableExists('merchants')) {
+    await pool.query(
+      `INSERT IGNORE INTO merchant_fee_profiles (merchant_id)
+       SELECT id FROM merchants`,
+    )
+  }
+  if (await tableExists('settlements')) {
+    await pool.query(
+      `UPDATE settlements
+       SET provider_reference = REPLACE(provider_reference, 'TRIPLEA-SIM-', 'CHAINFORGE-SIM-')
+       WHERE provider_reference LIKE 'TRIPLEA-SIM-%'`,
+    )
+  }
+  if (await tableExists('payments')) {
+    await pool.query(
+      `UPDATE payments
+       SET provider_reference = REPLACE(provider_reference, 'TRIPLEA-SIM-', 'CHAINFORGE-SIM-')
+       WHERE provider_reference LIKE 'TRIPLEA-SIM-%'`,
+    )
+  }
+}
+
+const seedDefaultAdmin = async () => {
+  if (!env.admin.email || !env.admin.password) return
+
+  const [existing] = await pool.query(
+    `SELECT admin_user_id FROM admin_users WHERE email = ? LIMIT 1`,
+    [env.admin.email]
+  )
+  if (existing.length > 0) return
+
+  const passwordHash = await bcrypt.hash(env.admin.password, 10)
+  const [result] = await pool.query(
+    `INSERT INTO admin_users (email, password_hash, full_name, role, status)
+     VALUES (?, ?, ?, 'SUPER_ADMIN', 'ACTIVE')`,
+    [env.admin.email, passwordHash, env.admin.fullName]
+  )
+
+  await pool.query(
+    `INSERT INTO audit_logs (actor_type, actor_id, action, details)
+     VALUES ('ADMIN', ?, 'ADMIN_USER_SEEDED', ?)`,
+    [result.insertId, JSON.stringify({ email: env.admin.email, role: 'SUPER_ADMIN' })]
+  )
+
+  console.log(`Seeded platform admin user: ${env.admin.email}`)
 }
 
 export async function ensureMainSchema() {
   await archiveConflictingTable('merchants', 'id')
   await archiveConflictingTable('merchant_users', 'id')
+  await archiveConflictingTable('admin_users', 'admin_user_id')
   await archiveConflictingTable('supported_assets', 'supported_asset_id')
   await archiveConflictingTable('payments', 'payment_id')
   await archiveConflictingTable('blockchain_transactions', 'blockchain_transaction_id')
   await archiveConflictingTable('merchant_payouts', 'payout_id')
+  await archiveConflictingTable('crypto_conversions', 'conversion_id')
   await archiveConflictingTable('settlements', 'settlement_id')
   await archiveConflictingTable('audit_logs', 'audit_log_id')
 
   await createCoreTables()
   await migrateCoreTables()
   await seedSupportedAssets()
+  await seedDefaultAdmin()
 }

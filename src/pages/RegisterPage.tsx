@@ -100,7 +100,7 @@ export default function RegisterPage() {
   }
 
   const handleUenChange = async (inputVal: string) => {
-    const clean = inputVal.trim().toUpperCase()
+    const clean = inputVal.replace(/\D/g, '').slice(0, 9)
     setUen(clean)
 
     if (!clean) return
@@ -138,12 +138,7 @@ export default function RegisterPage() {
   const [bankHolderName, setBankHolderName] = useState('')
   const [bankAccountNumber, setBankAccountNumber] = useState('')
 
-  // Official Singapore ACRA UEN Validation Engine (Supports ROC, ROB, & OTH Entities)
-  const validateUen = (v: string) => {
-    if (!v) return false
-    const clean = v.trim().toUpperCase()
-    return /^[0-9TSR][0-9A-Z]{7,9}$/.test(clean)
-  }
+  const validateUen = (v: string) => /^\d{9}$/.test(v)
   const validateEmail = (v: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)
   const validatePassword = (v: string) => v.length >= 8
 
@@ -173,8 +168,8 @@ export default function RegisterPage() {
           email,
           password,
           bankName,
-          accountHolderName: bankHolderName,
-          accountNo: bankAccountNumber,
+          bankHolderName,
+          bankAccountNumber,
           role,
           fullName,
         }),
@@ -246,16 +241,16 @@ export default function RegisterPage() {
                   />
                   <div className="flex flex-col space-y-2">
                     <div className="flex items-center justify-between">
-                      <label className="text-sm font-medium text-white">Singapore UEN (ACRA Format)</label>
+                      <label className="text-sm font-medium text-white">Singapore UEN</label>
                       {uen.length > 0 && validateUen(uen) && (
                         <span className="text-xs text-emerald-400 font-semibold flex items-center gap-1">
-                          ✓ Valid ACRA UEN
+                          Valid 9-digit UEN
                         </span>
                       )}
                     </div>
                     <input
                       type="text"
-                      placeholder="e.g. 201912345M or 53912345M"
+                      placeholder="e.g. 123456789"
                       value={uen}
                       onChange={(e) => handleUenChange(e.target.value)}
                       className={`w-full bg-brand-gray border-none rounded-xl h-11 px-4 text-white placeholder:text-white/20 outline-none focus:ring-2 focus:ring-white/20 font-mono ${
@@ -264,7 +259,7 @@ export default function RegisterPage() {
                     />
                     {uen.length > 0 && !validateUen(uen) && (
                       <span className="text-xs text-red-400">
-                        Invalid UEN structure. Example format: 201912345M (Company) or 53912345M (Sole Proprietor).
+                        Invalid UEN structure. Use 9 digits to match Stripe sandbox test data.
                       </span>
                     )}
                   </div>

@@ -62,6 +62,9 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const backendOrigin = window.location.port === '5173'
+    ? `${window.location.protocol}//${window.location.hostname}:4000`
+    : window.location.origin
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -78,20 +81,37 @@ export default function LoginPage() {
       const res = await fetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify({ email, password }),
       })
       const data = await res.json()
 
-      if (!res.ok) {
+      if (res.ok) {
+        localStorage.setItem('token', data.token || '')
+        localStorage.setItem('merchant', JSON.stringify(data.merchant))
+        navigate('/dashboard')
+        return
+      }
+
+      if (res.status !== 401) {
         setError(data.error || 'Login failed')
         return
       }
 
-      localStorage.setItem('token', data.token)
-      localStorage.setItem('merchant', JSON.stringify(data.merchant))
+      const adminRes = await fetch('/api/admin-auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ email, password }),
+      })
+      const adminData = await adminRes.json()
 
-      // Take merchant straight to Dashboard!
-      navigate('/dashboard')
+      if (!adminRes.ok) {
+        setError(adminData.error || data.error || 'Invalid email or password')
+        return
+      }
+
+      window.location.href = `${backendOrigin}/admin-dashboard.html`
     } catch {
       setError('Network error — is the backend running?')
     } finally {

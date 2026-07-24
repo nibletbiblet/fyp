@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { useNavigate, Link } from 'react-router-dom'
+import { useNavigate } from 'react-router-dom'
 import logoIcon from '../assets/logo-icon.png'
 
 interface MerchantProfile {
@@ -14,6 +14,14 @@ interface MerchantProfile {
   kyc_status: string
   container_id: string | null
   wallet_id: string | null
+  stripe_connected_account_id: string | null
+  stripe_onboarding_status: string | null
+  stripe_details_submitted: number | boolean | null
+  stripe_payouts_enabled: number | boolean | null
+  stripe_charges_enabled: number | boolean | null
+  stripe_requirements_currently_due: string[] | string | null
+  stripe_requirements_disabled_reason: string | null
+  stripe_status_synced_at: string | null
   onboarded_at: string | null
   created_at: string
 }
@@ -34,6 +42,10 @@ interface PaymentRecord {
   net_settlement_sgd_amount: number | null
   provider_fee_sgd: number | null
   platform_fee_sgd: number | null
+  conversion_cost_sgd: number | null
+  network_fee_sgd: number | null
+  buffer_reserved_sgd: number | null
+  buffer_released_sgd: number | null
   settlement_provider_reference: string | null
   settlement_status: string | null
   payout_reference: string | null
@@ -45,6 +57,36 @@ interface PaymentRecord {
   risk_decision: string | null
   created_at: string
   settled_at: string | null
+}
+
+interface SettlementRecord {
+  settlement_id: string
+  payment_id: string
+  payment_reference: string
+  amount_sgd: number
+  gross_sgd_amount: number
+  provider_fee_sgd: number
+  platform_fee_sgd: number
+  net_settlement_sgd_amount: number
+  conversion_rate: number | null
+  conversion_cost_sgd: number | null
+  network_fee_sgd: number | null
+  buffer_reserved_sgd: number | null
+  buffer_released_sgd: number | null
+  provider_reference: string | null
+  status: string
+  converted_at: string | null
+  settled_at: string | null
+  paid_out_at: string | null
+  crypto_symbol_snapshot: string | null
+  network_snapshot: string | null
+  expected_crypto_amount: number | null
+  received_crypto_amount: number | null
+  payment_status: string
+  payment_created_at: string
+  payout_reference: string | null
+  payout_provider_reference: string | null
+  payout_status: string | null
 }
 
 interface DashboardStats {
@@ -64,52 +106,6 @@ interface ToastNotification {
   timestamp: number
 }
 
-interface PaymentInstructions {
-  qrCodeImageDataUrl?: string
-  qrCodeData?: string
-  checkoutUrl?: string
-  receivingAddress?: string
-  expectedCryptoAmount?: string
-  quoteExpiresAt?: string
-}
-
-interface CreatedPaymentDetails {
-  payment_id: string
-  payment_reference: string
-  amount_sgd: string | number
-  expected_crypto_amount: string | number | null
-  received_crypto_amount?: string | number | null
-  receiving_address: string | null
-  network_snapshot: string | null
-  crypto_symbol_snapshot: string | null
-  quoted_rate_sgd_per_crypto: string | number | null
-  quote_expires_at: string | null
-  payment_instructions: PaymentInstructions | string | null
-  status?: string
-  checkoutUrl?: string
-}
-
-interface DetectedTransaction {
-  txHash?: string
-  amountEth?: string
-  confirmations?: number
-  blockNumber?: number
-}
-
-const DEFAULT_PAYMENT_ASSET_ID = 'asset-eth-sepolia'
-
-function parsePaymentInstructions(value: CreatedPaymentDetails['payment_instructions']): PaymentInstructions {
-  if (!value) return {}
-  if (typeof value === 'string') {
-    try {
-      return JSON.parse(value) as PaymentInstructions
-    } catch {
-      return {}
-    }
-  }
-  return value
-}
-
 export default function DashboardPage() {
   const navigate = useNavigate()
   const [merchant, setMerchant] = useState<MerchantProfile | null>(null)
@@ -127,6 +123,10 @@ export default function DashboardPage() {
     pendingCount: 0
   })
   const [payments, setPayments] = useState<PaymentRecord[]>([])
+  const [settlements, setSettlements] = useState<SettlementRecord[]>([])
+  const [dashboardError, setDashboardError] = useState('')
+  const [payoutSetupLoading, setPayoutSetupLoading] = useState(false)
+  const [payoutSetupError, setPayoutSetupError] = useState('')
 
   // Animation state — tracks when values change to trigger visual effects
   const prevStatsRef = useRef<DashboardStats | null>(null)
@@ -137,22 +137,6 @@ export default function DashboardPage() {
   const [grossFlash, setGrossFlash] = useState(false)
   const [recentlySettledIds, setRecentlySettledIds] = useState<Set<string>>(new Set())
   const [toasts, setToasts] = useState<ToastNotification[]>([])
-
-  // Modal State
-  const [modalOpen, setModalOpen] = useState(false)
-  const [amountSgd, setAmountSgd] = useState('')
-  const [merchantOrderReference, setMerchantOrderReference] = useState('')
-  const [description, setDescription] = useState('')
-  const [customerReference, setCustomerReference] = useState('')
-  const [modalLoading, setModalLoading] = useState(false)
-  const [modalError, setModalError] = useState('')
-  const [createdLink, setCreatedLink] = useState('')
-  const [createdPayment, setCreatedPayment] = useState<CreatedPaymentDetails | null>(null)
-  const [detectingPayment, setDetectingPayment] = useState(false)
-  const [detectionMessage, setDetectionMessage] = useState('')
-  const [detectedTransaction, setDetectedTransaction] = useState<DetectedTransaction | null>(null)
-  const [manualTxHash, setManualTxHash] = useState('')
-  const [manualVerifyLoading, setManualVerifyLoading] = useState(false)
 
   // Toast helper
   const addToast = (message: string, amount?: string, type: 'success' | 'info' = 'success') => {
@@ -166,14 +150,23 @@ export default function DashboardPage() {
 
   const fetchDashboardData = async () => {
     try {
-      const [statsRes, paymentsRes] = await Promise.all([
+      const [statsRes, paymentsRes, settlementsRes] = await Promise.all([
         fetch('/api/dashboard/stats', {
           credentials: 'include',
         }),
         fetch('/api/dashboard/payments', {
           credentials: 'include',
+        }),
+        fetch('/api/dashboard/settlements', {
+          credentials: 'include',
         })
       ])
+
+      if (!statsRes.ok || !paymentsRes.ok || !settlementsRes.ok) {
+        setDashboardError('Dashboard data could not be loaded. Check that the backend server and database schema are running.')
+      } else {
+        setDashboardError('')
+      }
 
       if (statsRes.ok) {
         const statsData = await statsRes.json()
@@ -244,8 +237,14 @@ export default function DashboardPage() {
         prevPaymentsRef.current = newPayments
         setPayments(newPayments)
       }
+
+      if (settlementsRes.ok) {
+        const settlementsData = await settlementsRes.json()
+        setSettlements(settlementsData.settlements as SettlementRecord[])
+      }
     } catch (err) {
       console.error('Error fetching dashboard data:', err)
+      setDashboardError('Dashboard data could not be loaded. Check that the backend server is running.')
     }
   }
 
@@ -281,19 +280,6 @@ export default function DashboardPage() {
     return () => clearInterval(interval)
   }, [navigate])
 
-  useEffect(() => {
-    if (!modalOpen || !createdPayment?.payment_id) return
-    if (!createdPayment.receiving_address) return
-    if (['SETTLED', 'PAID_OUT', 'EXPIRED', 'FAILED'].includes(createdPayment.status || '')) return
-
-    detectCreatedPayment()
-    const interval = setInterval(() => {
-      detectCreatedPayment()
-    }, 10000)
-
-    return () => clearInterval(interval)
-  }, [modalOpen, createdPayment?.payment_id, createdPayment?.status])
-
   const handleLogout = async () => {
     try {
       await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' })
@@ -303,129 +289,41 @@ export default function DashboardPage() {
     navigate('/login')
   }
 
-  const handleCreatePayment = async (e: React.FormEvent) => {
-    e.preventDefault()
-    setModalLoading(true)
-    setModalError('')
-    setCreatedLink('')
-    setCreatedPayment(null)
-    setDetectionMessage('')
-    setDetectedTransaction(null)
-    setManualTxHash('')
-
+  const getStripeRequirements = () => {
+    const value = merchant?.stripe_requirements_currently_due
+    if (!value) return []
+    if (Array.isArray(value)) return value
     try {
-      const res = await fetch('/api/payments', {
+      const parsed = JSON.parse(value)
+      return Array.isArray(parsed) ? parsed : []
+    } catch {
+      return []
+    }
+  }
+
+  const isPayoutSetupComplete = () => Boolean(
+    merchant?.stripe_connected_account_id
+      && merchant.stripe_onboarding_status === 'COMPLETE'
+      && Boolean(Number(merchant.stripe_details_submitted))
+      && Boolean(Number(merchant.stripe_payouts_enabled))
+      && !merchant.stripe_requirements_disabled_reason
+      && getStripeRequirements().length === 0
+  )
+
+  const handlePayoutSetup = async () => {
+    setPayoutSetupLoading(true)
+    setPayoutSetupError('')
+    try {
+      const res = await fetch('/api/merchant/stripe/onboarding-link', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
         credentials: 'include',
-        body: JSON.stringify({
-          amountSgd: Number(amountSgd),
-          supportedAssetId: DEFAULT_PAYMENT_ASSET_ID,
-          merchantOrderReference,
-          description,
-          customerReference,
-        })
       })
-      const data = await res.json()
-
-      if (!res.ok) {
-        setModalError(data.error || 'Failed to generate payment link')
-      } else {
-        const payment = data.payment as CreatedPaymentDetails
-        const checkoutPath = payment.checkoutUrl || `/checkout/${payment.payment_id}`
-        setCreatedPayment(payment)
-        setCreatedLink(window.location.origin + checkoutPath)
-        setDetectionMessage(payment.receiving_address ? 'Waiting for Sepolia payment...' : 'Identity review is required before crypto payment can start.')
-        setAmountSgd('')
-        setMerchantOrderReference('')
-        setDescription('')
-        setCustomerReference('')
-        // Refresh payments list immediately
-        fetchDashboardData()
-      }
-    } catch {
-      setModalError('Network error — please check if backend is running')
-    } finally {
-      setModalLoading(false)
-    }
-  }
-
-  const applyDetectedCheckout = (data: any) => {
-    if (data.checkout?.payment) {
-      const checkoutPath = createdPayment?.checkoutUrl || `/checkout/${data.checkout.payment.payment_id}`
-      setCreatedPayment({
-        ...data.checkout.payment,
-        checkoutUrl: checkoutPath,
-      })
-    }
-    if (data.transaction) {
-      setDetectedTransaction(data.transaction)
-    }
-    if (data.status === 'CONFIRMED') {
-      setDetectionMessage('Payment confirmed. SGD conversion created; payout batch processing will continue automatically.')
-      fetchDashboardData()
-    } else if (data.status === 'EXPIRED') {
-      setDetectionMessage('Payment expired before Sepolia payment was detected.')
-    } else {
-      setDetectionMessage('Waiting for Sepolia payment...')
-    }
-  }
-
-  const detectCreatedPayment = async () => {
-    if (!createdPayment?.payment_id || detectingPayment) return
-
-    setDetectingPayment(true)
-    try {
-      const res = await fetch(`/api/payments/${createdPayment.payment_id}/detect`)
-      const data = await res.json()
-      applyDetectedCheckout(data)
-      if (!res.ok && res.status !== 202) {
-        setDetectionMessage(data.error || 'Auto-detection is temporarily unavailable.')
-      }
-    } catch {
-      setDetectionMessage('Auto-detection is temporarily unavailable.')
-    } finally {
-      setDetectingPayment(false)
-    }
-  }
-
-  const handleManualVerify = async (e: React.FormEvent) => {
-    e.preventDefault()
-    if (!createdPayment?.payment_id || !manualTxHash) return
-
-    setManualVerifyLoading(true)
-    try {
-      const res = await fetch(`/api/payments/${createdPayment.payment_id}/submit-tx`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ txHash: manualTxHash }),
-      })
-      const data = await res.json()
-      if (res.ok && data.status === 'CONFIRMED') {
-        setDetectionMessage('Payment confirmed. SGD conversion created; payout batch processing will continue automatically.')
-        setDetectedTransaction({
-          txHash: data.txHash,
-          amountEth: data.amountEth,
-          confirmations: data.confirmations,
-        })
-        const checkoutRes = await fetch(`/api/payments/${createdPayment.payment_id}/checkout`)
-        const checkoutData = await checkoutRes.json()
-        if (checkoutRes.ok) {
-          setCreatedPayment({
-            ...checkoutData.payment,
-            checkoutUrl: createdPayment.checkoutUrl,
-          })
-        }
-        fetchDashboardData()
-      } else {
-        setDetectionMessage(data.error || 'Manual transaction verification failed.')
-      }
-    } catch {
-      setDetectionMessage('Manual transaction verification failed.')
-    } finally {
-      setManualVerifyLoading(false)
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || 'Unable to create Stripe payout setup link')
+      window.location.href = data.url
+    } catch (err) {
+      setPayoutSetupError(err instanceof Error ? err.message : 'Unable to create Stripe payout setup link')
+      setPayoutSetupLoading(false)
     }
   }
 
@@ -439,11 +337,12 @@ export default function DashboardPage() {
   }
 
   const getStatusBadge = (status: string) => {
-    if (status === 'ACTIVE_ONBOARDED' || status === 'SETTLED') return 'onboarded'
-    if (status === 'CONFIRMED' || status === 'CONVERTED_TO_SGD') return 'confirming'
+    if (status === 'ACTIVE_ONBOARDED' || status === 'SETTLED' || status === 'TRANSFERRED' || status === 'PAID_OUT') return 'onboarded'
+    if (status === 'CONFIRMED' || status === 'CONVERTED_TO_SGD' || status === 'PROCESSING') return 'confirming'
     if (status === 'PAYMENT_DETECTED' || status === 'CONFIRMING') return 'detecting'
-    if (status === 'ACTIVE_UNVERIFIED' || status === 'CREATED' || status === 'AWAITING_PAYMENT' || status === 'AWAITING_CRYPTO_SELECTION' || status === 'KYC_REQUIRED') return 'unverified'
+    if (status === 'ACTIVE_UNVERIFIED' || status === 'CREATED' || status === 'AWAITING_PAYMENT' || status === 'AWAITING_CRYPTO_SELECTION' || status === 'KYC_REQUIRED' || status === 'ELIGIBLE' || status === 'SETTLEMENT_PENDING') return 'unverified'
     if (status === 'MANUAL_REVIEW_REQUIRED') return 'detecting'
+    if (status === 'HELD') return 'unverified'
     if (status === 'FAILED' || status === 'EXPIRED') return 'suspended'
     return 'suspended'
   }
@@ -483,14 +382,6 @@ export default function DashboardPage() {
 
   const isOnboarded = merchant?.status === 'ACTIVE_ONBOARDED'
   const successRate = stats.totalCount > 0 ? Math.round((stats.settledCount / stats.totalCount) * 100) : 0
-  const createdInstructions = createdPayment ? parsePaymentInstructions(createdPayment.payment_instructions) : {}
-  const createdNeedsReview = Boolean(createdPayment && !createdPayment.receiving_address && createdPayment.status && createdPayment.status !== 'AWAITING_PAYMENT')
-  const createdExpectedAmount = createdPayment?.expected_crypto_amount
-    ? Number(createdPayment.expected_crypto_amount).toFixed(6)
-    : ''
-  const createdRate = createdPayment?.quoted_rate_sgd_per_crypto
-    ? Number(createdPayment.quoted_rate_sgd_per_crypto).toFixed(2)
-    : ''
 
   return (
     <div className="dashboard-layout">
@@ -684,20 +575,18 @@ export default function DashboardPage() {
               </div>
             </div>
           </div>
-          <div className="dashboard-topbar-right">
-            {isOnboarded && (
-              <button className="btn-dashboard-primary" onClick={() => setModalOpen(true)}>
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-                  <rect x="3" y="3" width="18" height="18" rx="2" />
-                  <path d="M7 7h.01M7 12h.01M7 17h.01M12 7h.01M12 12h.01M12 17h.01M17 7h.01M17 12h.01M17 17h.01" />
-                </svg>
-                Generate Payment Link / QR
-              </button>
-            )}
-          </div>
+          <div className="dashboard-topbar-right" />
         </div>
 
+        {dashboardError && (
+          <div className="form-error" style={{ marginBottom: 18, padding: 12, background: 'rgba(239,68,68,0.06)', border: '1px solid rgba(239,68,68,0.35)', borderRadius: 10 }}>
+            {dashboardError}
+          </div>
+        )}
+
         {/* Stats Grid */}
+        {activeNav === 'overview' && (
+          <>
         <div className="stats-grid dashboard-fadein">
           {/* Settled Balance (Net) */}
           <div className={`stat-card ${balanceFlash ? 'stat-card-flash-green' : ''}`}>
@@ -793,13 +682,52 @@ export default function DashboardPage() {
               <div className="infra-card-label">Settlement Wallet ID</div>
               <div className="infra-card-value">{merchant?.wallet_id || '—'}</div>
             </div>
+            <div className={`infra-card ${isPayoutSetupComplete() ? 'payout-ready-card' : 'payout-action-card'}`}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
+                <div>
+                  <div className="infra-card-label">Stripe Payout Setup</div>
+                  <div className="infra-card-value">
+                    {merchant?.stripe_onboarding_status?.replace(/_/g, ' ') || 'NOT STARTED'}
+                  </div>
+                </div>
+                <span className={`status-badge ${isPayoutSetupComplete() ? 'onboarded' : 'unverified'}`} style={{ fontSize: 10 }}>
+                  {isPayoutSetupComplete() ? 'Ready' : 'Incomplete'}
+                </span>
+              </div>
+              <div style={{ marginTop: 14, display: 'grid', gap: 6, fontSize: 12, color: 'rgba(255,255,255,0.45)' }}>
+                <div>Connected account: <span style={{ color: 'rgba(255,255,255,0.72)' }}>{merchant?.stripe_connected_account_id || 'Pending'}</span></div>
+                <div>Payouts enabled: <span style={{ color: merchant?.stripe_payouts_enabled ? '#22c55e' : '#f59e0b' }}>{merchant?.stripe_payouts_enabled ? 'Yes' : 'No'}</span></div>
+                {merchant?.stripe_requirements_disabled_reason && (
+                  <div>Disabled reason: {merchant.stripe_requirements_disabled_reason}</div>
+                )}
+                {getStripeRequirements().length > 0 && (
+                  <div>Currently due: {getStripeRequirements().slice(0, 3).join(', ')}{getStripeRequirements().length > 3 ? '...' : ''}</div>
+                )}
+              </div>
+              {!isPayoutSetupComplete() && (
+                <button
+                  className="btn-dashboard-primary"
+                  onClick={handlePayoutSetup}
+                  disabled={payoutSetupLoading}
+                  style={{ marginTop: 16, width: '100%', justifyContent: 'center' }}
+                >
+                  {payoutSetupLoading ? 'Opening Stripe...' : 'Complete payout setup'}
+                </button>
+              )}
+              {payoutSetupError && (
+                <div style={{ marginTop: 10, color: '#ef4444', fontSize: 12 }}>{payoutSetupError}</div>
+              )}
+            </div>
           </div>
+        )}
+          </>
         )}
 
         {/* Transaction History Table */}
+        {(activeNav === 'overview' || activeNav === 'payments') && (
         <div className="dashboard-table-wrap dashboard-fadein">
           <div className="dashboard-table-header">
-            <h3>Transaction History</h3>
+            <h3>{activeNav === 'payments' ? 'Payments' : 'Recent Payment Activity'}</h3>
             <span style={{
               fontSize: 11, color: 'rgba(255,255,255,0.3)',
               fontFamily: 'Space Mono, monospace',
@@ -818,10 +746,7 @@ export default function DashboardPage() {
             <div className="empty-state">
               <div className="empty-state-icon">📄</div>
               <h4>No Transactions Yet</h4>
-              <p>Create your first payment link to start receiving crypto payments.</p>
-              <button className="btn-dashboard-primary" onClick={() => setModalOpen(true)}>
-                Generate Payment Link / QR →
-              </button>
+              <p>Payment records will appear here after customer payments are created by the payment module.</p>
             </div>
           ) : (
             <div style={{ overflowX: 'auto' }}>
@@ -838,7 +763,6 @@ export default function DashboardPage() {
                     <th>Risk</th>
                     <th>Status</th>
                     <th>Time</th>
-                    <th>Action</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -884,13 +808,13 @@ export default function DashboardPage() {
                           fontSize: 12,
                         }}>
                           {(p.provider_fee_sgd !== null && p.platform_fee_sgd !== null)
-                            ? `S$ ${(Number(p.provider_fee_sgd) + Number(p.platform_fee_sgd) + Number(p.payout_fee_sgd || 0)).toFixed(2)}`
+                            ? `S$ ${(Number(p.platform_fee_sgd) + Number(p.conversion_cost_sgd ?? p.provider_fee_sgd) + Number(p.network_fee_sgd || 0) + Number(p.payout_fee_sgd || 0)).toFixed(2)}`
                             : '—'}
                         </td>
                         <td>
                           {p.settlement_status ? (
                             <div style={{ display: 'grid', gap: 4 }}>
-                              <span className={`status-badge ${p.payout_status === 'PAID_OUT' ? 'onboarded' : p.settlement_status === 'SETTLED' ? 'confirming' : 'detecting'}`} style={{ fontSize: 10 }}>
+                              <span className={`status-badge ${p.payout_status === 'PAID_OUT' ? 'onboarded' : getStatusBadge(p.settlement_status)}`} style={{ fontSize: 10 }}>
                                 {(p.payout_status || p.settlement_status).replace(/_/g, ' ')}
                               </span>
                               <span style={{ color: 'rgba(255,255,255,0.35)', fontSize: 10, fontFamily: "'Space Mono', monospace" }}>
@@ -922,15 +846,6 @@ export default function DashboardPage() {
                         <td style={{ color: 'rgba(255,255,255,0.4)', fontSize: 12, whiteSpace: 'nowrap' }}>
                           {formatTimeAgo(p.created_at)}
                         </td>
-                        <td>
-                          <Link
-                            to={`/checkout/${p.payment_id}`}
-                            className="btn-onboarding-back"
-                            style={{ padding: '6px 12px', fontSize: 11, textDecoration: 'none', borderStyle: 'dashed' }}
-                          >
-                            Checkout Link ↗
-                          </Link>
-                        </td>
                       </tr>
                     )
                   })}
@@ -939,9 +854,101 @@ export default function DashboardPage() {
             </div>
           )}
         </div>
+        )}
+
+        {activeNav === 'settlements' && (
+          <div className="dashboard-table-wrap dashboard-fadein">
+            <div className="dashboard-table-header">
+              <h3>Settlements</h3>
+              <span style={{
+                fontSize: 11, color: 'rgba(255,255,255,0.3)',
+                fontFamily: 'Space Mono, monospace',
+              }}>
+                {settlements.length} record{settlements.length !== 1 ? 's' : ''} • Merchant scoped
+              </span>
+            </div>
+
+            {!isOnboarded ? (
+              <div className="empty-state">
+                <div className="empty-state-icon">🔒</div>
+                <h4>Account Not Verified</h4>
+                <p>Please complete email verification to unlock settlement records.</p>
+              </div>
+            ) : settlements.length === 0 ? (
+              <div className="empty-state">
+                <div className="empty-state-icon">📄</div>
+                <h4>No Settlements Yet</h4>
+                <p>Settlements will appear here after a payment is confirmed and converted to SGD.</p>
+              </div>
+            ) : (
+              <div style={{ overflowX: 'auto' }}>
+                <table className="dashboard-table">
+                  <thead>
+                    <tr>
+                      <th>Settlement ID</th>
+                      <th>Payment</th>
+                      <th>Gross (SGD)</th>
+                      <th>Platform Fee</th>
+                      <th>Conversion Cost</th>
+                      <th>Network Fee</th>
+                      <th>Buffer Released</th>
+                      <th>Net Settlement</th>
+                      <th>Status</th>
+                      <th>Payout</th>
+                      <th>Converted</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {settlements.map((s) => (
+                      <tr key={s.settlement_id}>
+                        <td style={{ fontFamily: 'Space Mono, monospace', fontSize: 12 }}>
+                          {s.settlement_id}
+                        </td>
+                        <td>
+                          <div style={{ display: 'grid', gap: 4 }}>
+                            <span style={{ fontFamily: 'Space Mono, monospace', fontSize: 12 }}>{s.payment_reference}</span>
+                            <span style={{ color: 'rgba(255,255,255,0.4)', fontSize: 11 }}>
+                              {s.crypto_symbol_snapshot || 'N/A'} {s.network_snapshot ? `(${s.network_snapshot})` : ''}
+                            </span>
+                          </div>
+                        </td>
+                        <td style={{ fontWeight: 600 }}>S$ {Number(s.gross_sgd_amount).toFixed(2)}</td>
+                        <td>S$ {Number(s.platform_fee_sgd || 0).toFixed(2)}</td>
+                        <td>S$ {Number((s.conversion_cost_sgd ?? s.provider_fee_sgd) || 0).toFixed(2)}</td>
+                        <td>S$ {Number(s.network_fee_sgd || 0).toFixed(2)}</td>
+                        <td style={{ color: '#22c55e' }}>S$ {Number(s.buffer_released_sgd || 0).toFixed(2)}</td>
+                        <td style={{ color: '#22c55e', fontWeight: 700 }}>
+                          S$ {Number(s.net_settlement_sgd_amount).toFixed(2)}
+                        </td>
+                        <td>
+                          <span className={`status-badge ${getStatusBadge(s.status)}`} style={{ fontSize: 10 }}>
+                            {s.status.replace(/_/g, ' ')}
+                          </span>
+                        </td>
+                        <td>
+                          <div style={{ display: 'grid', gap: 4 }}>
+                            <span className={`status-badge ${s.payout_status === 'PAID_OUT' ? 'onboarded' : s.payout_status ? 'confirming' : 'unverified'}`} style={{ fontSize: 10 }}>
+                              {(s.payout_status || 'NOT BATCHED').replace(/_/g, ' ')}
+                            </span>
+                            <span style={{ color: 'rgba(255,255,255,0.35)', fontSize: 10, fontFamily: "'Space Mono', monospace" }}>
+                              {s.payout_reference || s.payout_provider_reference || '—'}
+                            </span>
+                          </div>
+                        </td>
+                        <td style={{ color: 'rgba(255,255,255,0.4)', fontSize: 12, whiteSpace: 'nowrap' }}>
+                          {s.converted_at ? formatTimeAgo(s.converted_at) : '—'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Account Info */}
-        {merchant && (
+        {merchant && activeNav === 'settings' && (
           <div className="dashboard-table-wrap dashboard-fadein" style={{ marginTop: 24 }}>
             <div className="dashboard-table-header">
               <h3>Account Information</h3>
@@ -982,374 +989,6 @@ export default function DashboardPage() {
         )}
       </main>
 
-      {/* Modal - Create Payment Link */}
-      {modalOpen && (
-        <div style={{
-          position: 'fixed',
-          top: 0,
-          left: 0,
-          right: 0,
-          bottom: 0,
-          background: 'rgba(0,0,0,0.85)',
-          backdropFilter: 'blur(8px)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          zIndex: 1000,
-          padding: 20
-        }}>
-          <div style={{
-            width: '100%',
-            maxWidth: 480,
-            background: '#0c0c0c',
-            border: '1px solid rgba(240,165,0,0.15)',
-            borderRadius: 16,
-            padding: 28,
-            boxShadow: '0 10px 40px rgba(0,0,0,0.6)',
-            position: 'relative',
-            maxHeight: '92vh',
-            overflowY: 'auto'
-          }}>
-            <button
-              onClick={() => {
-                setModalOpen(false)
-                setCreatedLink('')
-                setCreatedPayment(null)
-                setModalError('')
-                setDetectionMessage('')
-                setDetectedTransaction(null)
-                setManualTxHash('')
-                setAmountSgd('')
-                setMerchantOrderReference('')
-                setDescription('')
-                setCustomerReference('')
-              }}
-              style={{
-                position: 'absolute',
-                top: 16,
-                right: 16,
-                background: 'none',
-                border: 'none',
-                color: 'rgba(255,255,255,0.4)',
-                fontSize: 20,
-                cursor: 'pointer'
-              }}
-            >
-              ✕
-            </button>
-
-            <h2 style={{ fontSize: 20, fontWeight: 'bold', color: '#fff', marginBottom: 6 }}>
-              Generate Payment Link
-            </h2>
-            <p style={{ fontSize: 13, color: 'rgba(255,255,255,0.4)', marginBottom: 24 }}>
-              Instantly create a shareable, testnet checkout link for your customers.
-            </p>
-
-            {modalError && (
-              <div className="form-error" style={{ marginBottom: 16, padding: 10, background: 'rgba(239,68,68,0.05)', border: '1px solid #ef4444', borderRadius: 8 }}>
-                ⚠ {modalError}
-              </div>
-            )}
-
-            {!createdLink ? (
-              <form onSubmit={handleCreatePayment}>
-                <div className="form-group">
-                  <label className="form-label">Payment Amount (SGD) <span style={{ color: '#f0a500' }}>*</span></label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    placeholder="e.g. 100.00"
-                    value={amountSgd}
-                    onChange={(e) => setAmountSgd(e.target.value)}
-                    className="form-input"
-                    required
-                  />
-                </div>
-                <div className="form-group">
-                  <label className="form-label">Currency / Network</label>
-                  <select className="form-select" value={DEFAULT_PAYMENT_ASSET_ID} disabled>
-                    <option value={DEFAULT_PAYMENT_ASSET_ID}>Sepolia ETH - Ethereum Sepolia</option>
-                  </select>
-                </div>
-                <div className="form-group">
-                  <label className="form-label">Order Reference</label>
-                  <input
-                    type="text"
-                    placeholder="e.g. INV-2035"
-                    value={merchantOrderReference}
-                    onChange={(e) => setMerchantOrderReference(e.target.value)}
-                    className="form-input"
-                  />
-                </div>
-                <div className="form-group">
-                  <label className="form-label">Description</label>
-                  <input
-                    type="text"
-                    placeholder="e.g. Website design deposit"
-                    value={description}
-                    onChange={(e) => setDescription(e.target.value)}
-                    className="form-input"
-                  />
-                </div>
-                <div className="form-group">
-                  <label className="form-label">Customer Reference</label>
-                  <input
-                    type="text"
-                    placeholder="e.g. CUST-1001"
-                    value={customerReference}
-                    onChange={(e) => setCustomerReference(e.target.value)}
-                    className="form-input"
-                  />
-                </div>
-                <button
-                  type="submit"
-                  disabled={modalLoading}
-                  className="btn-onboarding-primary"
-                  style={{ width: '100%', justifyContent: 'center', marginTop: 12 }}
-                >
-                  {modalLoading ? 'Generating...' : 'Create Payment Link →'}
-                </button>
-              </form>
-            ) : (
-              <div>
-                <div style={{
-                  padding: 16,
-                  background: 'rgba(34,197,94,0.05)',
-                  border: '1px solid #22c55e',
-                  borderRadius: 10,
-                  color: '#22c55e',
-                  fontSize: 13,
-                  fontWeight: 600,
-                  textAlign: 'center',
-                  marginBottom: 20
-                }}>
-                  ✓ Payment Link Generated Successfully!
-                </div>
-
-                {createdInstructions.qrCodeImageDataUrl && (
-                  <div style={{ textAlign: 'center', marginBottom: 20 }}>
-                    <img
-                      src={createdInstructions.qrCodeImageDataUrl}
-                      alt="Checkout QR code"
-                      style={{ width: 220, height: 220, background: '#fff', borderRadius: 10, padding: 8 }}
-                    />
-                    <div style={{ marginTop: 8, fontSize: 11, color: 'rgba(255,255,255,0.4)' }}>
-                      Scan with MetaMask on Ethereum Sepolia.
-                    </div>
-                  </div>
-                )}
-
-                {createdPayment && createdNeedsReview && (
-                  <div style={{ display: 'grid', gap: 10, marginBottom: 18 }}>
-                    <div className="infra-card">
-                      <div className="infra-card-label">SGD Amount</div>
-                      <div className="infra-card-value">S$ {Number(createdPayment.amount_sgd).toFixed(2)}</div>
-                    </div>
-                    <div style={{
-                      padding: 12,
-                      border: '1px solid rgba(240,165,0,0.25)',
-                      borderRadius: 8,
-                      color: '#f0a500',
-                      background: 'rgba(240,165,0,0.06)',
-                      fontSize: 12,
-                      lineHeight: 1.6,
-                    }}>
-                      Risk policy review is required before a crypto quote and wallet QR can be generated.
-                      Share the checkout link with the customer so they can complete the required identity step.
-                    </div>
-                  </div>
-                )}
-
-                {createdPayment && !createdNeedsReview && (
-                  <div style={{ display: 'grid', gap: 10, marginBottom: 18 }}>
-                    <div className="infra-card">
-                      <div className="infra-card-label">SGD Amount</div>
-                      <div className="infra-card-value">S$ {Number(createdPayment.amount_sgd).toFixed(2)}</div>
-                    </div>
-                    <div className="infra-card">
-                      <div className="infra-card-label">Expected Sepolia ETH</div>
-                      <div className="infra-card-value" style={{ color: '#f0a500' }}>
-                        {createdExpectedAmount} ETH
-                      </div>
-                    </div>
-                    <div className="infra-card">
-                      <div className="infra-card-label">Receiving Wallet</div>
-                      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                        <code style={{ flex: 1, color: '#f5f5f0', wordBreak: 'break-all', fontSize: 11 }}>
-                          {createdPayment.receiving_address}
-                        </code>
-                        <button
-                          type="button"
-                          className="btn-onboarding-back"
-                          style={{ padding: '6px 10px', fontSize: 11 }}
-                          onClick={() => navigator.clipboard.writeText(createdPayment.receiving_address || '')}
-                        >
-                          Copy
-                        </button>
-                      </div>
-                    </div>
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-                      <div className="infra-card">
-                        <div className="infra-card-label">Network</div>
-                        <div className="infra-card-value">Ethereum Sepolia</div>
-                      </div>
-                      <div className="infra-card">
-                        <div className="infra-card-label">ETH/SGD Rate</div>
-                        <div className="infra-card-value">S$ {createdRate}</div>
-                      </div>
-                    </div>
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-                      <div className="infra-card">
-                        <div className="infra-card-label">Quote Expires</div>
-                        <div className="infra-card-value">
-                          {createdPayment.quote_expires_at ? new Date(createdPayment.quote_expires_at).toLocaleString() : 'N/A'}
-                        </div>
-                      </div>
-                      <div className="infra-card">
-                        <div className="infra-card-label">Copy ETH Amount</div>
-                        <button
-                          type="button"
-                          className="btn-onboarding-back"
-                          style={{ width: '100%', padding: '6px 10px', fontSize: 11 }}
-                          onClick={() => navigator.clipboard.writeText(String(createdPayment.expected_crypto_amount || ''))}
-                        >
-                          Copy Amount
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                <div
-                  style={{
-                    padding: 12,
-                    border: detectionMessage.includes('confirmed') ? '1px solid #22c55e' : '1px solid rgba(240,165,0,0.25)',
-                    borderRadius: 8,
-                    color: detectionMessage.includes('confirmed') ? '#22c55e' : '#f0a500',
-                    background: detectionMessage.includes('confirmed') ? 'rgba(34,197,94,0.06)' : 'rgba(240,165,0,0.06)',
-                    fontSize: 12,
-                    lineHeight: 1.6,
-                    marginBottom: 18,
-                  }}
-                >
-                  <strong>{detectingPayment ? 'Scanning Sepolia...' : detectionMessage || 'Waiting for Sepolia payment...'}</strong>
-                  {!detectionMessage.includes('confirmed') && (
-                    <div style={{ color: 'rgba(255,255,255,0.45)', marginTop: 4 }}>
-                      Auto-detection scans recent Sepolia blocks every 10 seconds.
-                    </div>
-                  )}
-                  {detectedTransaction?.txHash && (
-                    <div style={{ marginTop: 8, color: 'rgba(255,255,255,0.72)' }}>
-                      <div>Tx: <code style={{ color: '#f5f5f0', wordBreak: 'break-all' }}>{detectedTransaction.txHash}</code></div>
-                      {detectedTransaction.amountEth && <div>Received: {Number(detectedTransaction.amountEth).toFixed(6)} ETH</div>}
-                      {detectedTransaction.confirmations !== undefined && <div>Confirmations: {detectedTransaction.confirmations}</div>}
-                    </div>
-                  )}
-                </div>
-
-                <div className="form-group">
-                  <label className="form-label">Shareable Checkout URL</label>
-                  <div style={{
-                    display: 'flex',
-                    background: 'rgba(255,255,255,0.03)',
-                    border: '1px solid rgba(255,255,255,0.08)',
-                    borderRadius: 8,
-                    padding: 8
-                  }}>
-                    <input
-                      type="text"
-                      readOnly
-                      value={createdLink}
-                      style={{
-                        flex: 1,
-                        background: 'none',
-                        border: 'none',
-                        color: '#f0a500',
-                        fontSize: 12,
-                        fontFamily: 'Space Mono, monospace',
-                        outline: 'none',
-                        padding: '0 8px'
-                      }}
-                    />
-                    <button
-                      onClick={() => navigator.clipboard.writeText(createdLink)}
-                      className="btn-onboarding-primary"
-                      style={{ padding: '6px 12px', fontSize: 11 }}
-                    >
-                      Copy
-                    </button>
-                  </div>
-                </div>
-
-                <div style={{ padding: 12, border: '1px dashed rgba(240,165,0,0.25)', borderRadius: 8, color: 'rgba(255,255,255,0.55)', fontSize: 12, lineHeight: 1.6 }}>
-                  1. Customer scans the MetaMask payment QR.
-                  <br />
-                  2. Customer sends the exact Sepolia ETH amount to the receiving wallet.
-                  <br />
-                  3. The website scans Sepolia and confirms the matching payment automatically.
-                  <br />
-                  4. MVP matching uses shared wallet + amount + time window. Production should use unique payment addresses, provider webhooks, or stronger unique amount matching.
-                </div>
-
-                <form onSubmit={handleManualVerify} style={{ marginTop: 16 }}>
-                  <details>
-                    <summary style={{ cursor: 'pointer', color: '#f0a500', fontSize: 12, fontWeight: 700 }}>
-                      Payment not detected? Paste transaction hash manually.
-                    </summary>
-                    <div style={{ marginTop: 12 }}>
-                      <input
-                        type="text"
-                        value={manualTxHash}
-                        onChange={(e) => setManualTxHash(e.target.value.trim())}
-                        className="form-input"
-                        placeholder="0x..."
-                        autoComplete="off"
-                      />
-                      <button
-                        type="submit"
-                        className="btn-onboarding-primary"
-                        disabled={!manualTxHash || manualVerifyLoading}
-                        style={{ width: '100%', justifyContent: 'center', marginTop: 10 }}
-                      >
-                        {manualVerifyLoading ? 'Verifying...' : 'Verify Hash Manually'}
-                      </button>
-                    </div>
-                  </details>
-                </form>
-
-                <div style={{ display: 'flex', gap: 12, marginTop: 24 }}>
-                  <a
-                    href={createdLink}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="btn-onboarding-primary"
-                    style={{ flex: 1, justifyContent: 'center', textDecoration: 'none', textAlign: 'center' }}
-                  >
-                    Open Checkout ↗
-                  </a>
-                  <button
-                    onClick={() => {
-                      setCreatedLink('')
-                      setCreatedPayment(null)
-                      setDetectionMessage('')
-                      setDetectedTransaction(null)
-                      setManualTxHash('')
-                      setAmountSgd('')
-                      setMerchantOrderReference('')
-                      setDescription('')
-                      setCustomerReference('')
-                    }}
-                    className="btn-onboarding-back"
-                    style={{ flex: 1 }}
-                  >
-                    Create Another
-                  </button>
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
     </div>
   )
 }

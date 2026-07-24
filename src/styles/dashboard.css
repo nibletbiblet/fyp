@@ -455,6 +455,16 @@
   border-radius: 12px;
 }
 
+.infra-card.payout-ready-card {
+  background: rgba(34, 197, 94, 0.03);
+  border-color: rgba(34, 197, 94, 0.18);
+}
+
+.infra-card.payout-action-card {
+  background: rgba(240, 165, 0, 0.03);
+  border-color: rgba(240, 165, 0, 0.2);
+}
+
 .infra-card-label {
   font-size: 10px;
   font-weight: 600;

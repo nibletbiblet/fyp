@@ -6,7 +6,6 @@
     "jsx": "react-jsx",
     "types": ["vite/client", "react", "react-dom"],
     "skipLibCheck": true,
-    "jsx": "react-jsx",
 
     /* Bundler mode */
     "moduleResolution": "bundler",

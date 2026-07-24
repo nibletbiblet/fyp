@@ -67,8 +67,8 @@ function classify(rules) {
   return { severityScore: 0, riskLevel: 'LOW', decision: 'ALLOW' }
 }
 
-async function getPayment(paymentId) {
-  const [payments] = await pool.query(
+async function getPayment(paymentId, conn = pool) {
+  const [payments] = await conn.query(
     `SELECT payment_id, merchant_id, customer_reference, amount_sgd, status
      FROM payments
      WHERE payment_id = ?`,
@@ -80,8 +80,8 @@ async function getPayment(paymentId) {
   return payments[0]
 }
 
-async function hasVerifiedKyc(paymentId) {
-  const [rows] = await pool.query(
+async function hasVerifiedKyc(paymentId, conn = pool) {
+  const [rows] = await conn.query(
     `SELECT kyc_status
      FROM payment_kyc_cases
      WHERE payment_id = ?
@@ -91,12 +91,12 @@ async function hasVerifiedKyc(paymentId) {
   return rows[0]?.kyc_status === 'VERIFIED'
 }
 
-async function getCustomerHistory(payment) {
+async function getCustomerHistory(payment, conn = pool) {
   if (!payment.customer_reference) {
     return { previousPayments: 0, recentPayments: 0, missingReference: true }
   }
 
-  const [history] = await pool.query(
+  const [history] = await conn.query(
     `SELECT
        SUM(CASE WHEN payment_id <> ? THEN 1 ELSE 0 END) AS previous_payments,
        SUM(CASE WHEN payment_id <> ? AND created_at >= DATE_SUB(CURRENT_TIMESTAMP, INTERVAL 1 HOUR) THEN 1 ELSE 0 END) AS recent_payments
@@ -112,11 +112,11 @@ async function getCustomerHistory(payment) {
   }
 }
 
-async function getWalletProfile(walletAddress) {
+async function getWalletProfile(walletAddress, conn = pool) {
   const normalizedWallet = normalizeWallet(walletAddress)
   if (!normalizedWallet) return null
 
-  const [profiles] = await pool.query(
+  const [profiles] = await conn.query(
     `SELECT *
      FROM wallet_profiles
      WHERE wallet_address = ?`,
@@ -143,12 +143,12 @@ export async function getLatestRiskAssessment(paymentId) {
   return mapRiskAssessment(rows[0])
 }
 
-export async function assessPaymentRisk(paymentId, { stage = 'PRE_PAYMENT', walletAddress = null } = {}) {
-  const payment = await getPayment(paymentId)
+export async function assessPaymentRisk(paymentId, { stage = 'PRE_PAYMENT', walletAddress = null, conn = pool } = {}) {
+  const payment = await getPayment(paymentId, conn)
   const normalizedWallet = normalizeWallet(walletAddress)
-  const customerHistory = await getCustomerHistory(payment)
-  const walletProfile = await getWalletProfile(normalizedWallet)
-  const verifiedKyc = await hasVerifiedKyc(paymentId)
+  const customerHistory = await getCustomerHistory(payment, conn)
+  const walletProfile = await getWalletProfile(normalizedWallet, conn)
+  const verifiedKyc = await hasVerifiedKyc(paymentId, conn)
   const rules = []
 
   if (Number(payment.amount_sgd) > 999) {
@@ -198,7 +198,7 @@ export async function assessPaymentRisk(paymentId, { stage = 'PRE_PAYMENT', wall
     rules,
   }
 
-  await pool.query(
+  await conn.query(
     `INSERT INTO risk_assessments (
        risk_assessment_id, payment_id, stage, wallet_address, score, risk_level, decision, reasons
      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -217,11 +217,11 @@ export async function assessPaymentRisk(paymentId, { stage = 'PRE_PAYMENT', wall
   return assessment
 }
 
-export async function updateWalletProfileAfterPayment({ walletAddress, succeeded }) {
+export async function updateWalletProfileAfterPayment({ walletAddress, succeeded, conn = pool }) {
   const normalizedWallet = normalizeWallet(walletAddress)
   if (!normalizedWallet) return
 
-  await pool.query(
+  await conn.query(
     `INSERT INTO wallet_profiles (
        wallet_address, successful_payments, failed_payments, first_seen_at, last_seen_at
      ) VALUES (?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
