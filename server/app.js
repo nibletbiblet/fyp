@@ -75,7 +75,7 @@ app.get('/api/acra/lookup/:uen', async (req, res) => {
     '200604346E': 'Singapore Airlines Limited',
     '198000346R': 'Singapore Telecommunications Limited (Singtel)',
     '201912345': 'ACME Fintech Solutions Pte. Ltd.',
-    '123456789': 'Stripe Sandbox Merchant Pte. Ltd.',
+    '123456789': 'ChainForge Demo Merchant Pte. Ltd.',
   }
 
   if (acraDictionary[uen]) {
@@ -90,7 +90,7 @@ app.post('/api/kyc/submit', authenticateToken, async (req, res) => {
     const raw = req.body || {}
     const sanitizedKycData = {
       businessName: raw.businessName || 'Singapore SME Merchant',
-      uen: raw.uen || '201912345M',
+      uen: String(raw.uen || '201912345M').trim().toUpperCase().replace(/[^0-9A-Z]/g, ''),
       businessType: raw.businessType || 'PRIVATE_LIMITED',
       industrySector: raw.industrySector || 'SOFTWARE_IT',
       registeredAddress: raw.registeredAddress || '71 Ayer Rajah Crescent, #03-12, Singapore 139951',

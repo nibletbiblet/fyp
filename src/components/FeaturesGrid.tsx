@@ -28,7 +28,7 @@ const capabilities = [
   {
     id: 'cap-audit',
     code: 'SEC',
-    title: 'Triple Audited',
+    title: 'Independently Audited',
     detail: 'Trail of Bits + OpenZeppelin + Halborn. Ongoing bug bounty at $500K per critical vulnerability.',
     metric: '$500K',
     metricLabel: 'bug bounty cap',

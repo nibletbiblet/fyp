@@ -66,7 +66,7 @@ detectPayment()
 confirmPayment()
 convertToSgd()
 
-The mockConversionProvider represents a MAS-licensed crypto payment provider such as Triple-A.
+The mockConversionProvider represents a MAS-licensed crypto payment provider abstraction for ChainForge.
 
 ## Compliance Position
 
@@ -79,8 +79,8 @@ For the prototype:
 
 For realistic Singapore deployment:
 - crypto receipt, custody, conversion, and transfer should be handled by a MAS-licensed Digital Payment Token provider
-- use “MAS-licensed crypto payment provider” in code comments/docs instead of assuming BVNK
-- Triple-A can be referenced as an example provider, but real API integration requires credentials and approval
+- use “MAS-licensed crypto payment provider” in code comments/docs instead of assuming a specific third-party brand
+- third-party provider API integration requires credentials and approval
 
 ## Payment Statuses
 

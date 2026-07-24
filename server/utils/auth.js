@@ -59,8 +59,8 @@ export async function getUserByEmail(pool, email) {
        m.account_last4,
        m.bank_account_label,
        m.kyc_status,
-       m.triplea_merchant_id,
-       m.triplea_wallet_id
+       m.container_id,
+       m.wallet_id
      FROM merchant_users mu
      JOIN merchants m ON m.id = mu.merchant_id
      WHERE mu.email = ?`,

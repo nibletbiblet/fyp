@@ -29,8 +29,8 @@ ALTER TABLE `merchants`
 --   account_last4 (varchar)
 --   bank_account_label (varchar) — stores the business UEN
 --   status (varchar, default 'ACTIVE_UNVERIFIED')
---   triplea_merchant_id (varchar, nullable)
---   triplea_wallet_id (varchar, nullable)
+--   legacy_provider_merchant_id (varchar, nullable)
+--   legacy_provider_wallet_id (varchar, nullable)
 
 -- ── 2. Create merchant_users table ──
 CREATE TABLE IF NOT EXISTS `merchant_users` (

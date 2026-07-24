@@ -444,8 +444,6 @@ const seedSupportedAssets = async () => {
 }
 
 const migrateCoreTables = async () => {
-  await renameColumnIfNeeded('merchants', 'triplea_merchant_id', 'container_id', 'VARCHAR(64) DEFAULT NULL')
-  await renameColumnIfNeeded('merchants', 'triplea_wallet_id', 'wallet_id', 'VARCHAR(64) DEFAULT NULL')
   await addColumnIfMissing('merchants', 'container_id', '`container_id` VARCHAR(64) DEFAULT NULL AFTER `kyc_status`')
   await addColumnIfMissing('merchants', 'wallet_id', '`wallet_id` VARCHAR(64) DEFAULT NULL AFTER `container_id`')
   await addColumnIfMissing('merchants', 'stripe_connected_account_id', '`stripe_connected_account_id` VARCHAR(128) DEFAULT NULL AFTER `wallet_id`')
@@ -487,20 +485,6 @@ const migrateCoreTables = async () => {
     await pool.query(
       `INSERT IGNORE INTO merchant_fee_profiles (merchant_id)
        SELECT id FROM merchants`,
-    )
-  }
-  if (await tableExists('settlements')) {
-    await pool.query(
-      `UPDATE settlements
-       SET provider_reference = REPLACE(provider_reference, 'TRIPLEA-SIM-', 'CHAINFORGE-SIM-')
-       WHERE provider_reference LIKE 'TRIPLEA-SIM-%'`,
-    )
-  }
-  if (await tableExists('payments')) {
-    await pool.query(
-      `UPDATE payments
-       SET provider_reference = REPLACE(provider_reference, 'TRIPLEA-SIM-', 'CHAINFORGE-SIM-')
-       WHERE provider_reference LIKE 'TRIPLEA-SIM-%'`,
     )
   }
 }

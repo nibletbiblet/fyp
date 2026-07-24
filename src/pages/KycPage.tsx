@@ -73,11 +73,8 @@ export function KycPage() {
 
   const fetchProfileAndStatus = async () => {
     try {
-      const token = localStorage.getItem('token')
-      if (!token) return
-
       const profileRes = await fetch('/api/auth/me', {
-        headers: { Authorization: `Bearer ${token}` }
+        credentials: 'include',
       })
       if (profileRes.ok) {
         const profileData = await profileRes.json()
@@ -94,13 +91,13 @@ export function KycPage() {
 
           setRegisteredMerchant({
             name: merch.business_name || merch.name,
-            uen: merch.uen || merch.bank_account_label,
+            uen: (merch.uen || merch.bank_account_label || '').trim().toUpperCase(),
             email: merch.email
           })
           setFormData((prev) => ({
             ...prev,
             businessName: merch.business_name || merch.name || prev.businessName,
-            uen: merch.uen || merch.bank_account_label || prev.uen,
+            uen: (merch.uen || merch.bank_account_label || prev.uen || '').trim().toUpperCase(),
             repFullName: merch.fullName || prev.repFullName,
             repDesignation: roleLabel
           }))
@@ -108,7 +105,7 @@ export function KycPage() {
       }
 
       const statusRes = await fetch('/api/kyc/status', {
-        headers: { Authorization: `Bearer ${token}` }
+        credentials: 'include',
       })
       if (statusRes.ok) {
         const data = await statusRes.json()
@@ -134,13 +131,12 @@ export function KycPage() {
         }))
       }
 
-      const token = localStorage.getItem('token')
       const res = await fetch('/api/kyc/submit', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {})
         },
+        credentials: 'include',
         body: JSON.stringify(payload)
       })
 
@@ -199,7 +195,7 @@ export function KycPage() {
             <div className="space-y-2">
               <h2 className="text-3xl font-medium tracking-tight text-white">KYB Verified</h2>
               <p className="text-white/40 text-sm">
-                Verified entity: <strong className="text-white">{formData.businessName || 'Acme Corp'}</strong> (UEN: {formData.uen || '53912345M'})
+                Verified entity: <strong className="text-white">{formData.businessName || 'Acme Corp'}</strong> (UEN: {formData.uen || '201912345M'})
               </p>
             </div>
 
@@ -227,7 +223,7 @@ export function KycPage() {
             </div>
           </motion.div>
         ) : (
-          /* Form Wizard View matching exact Onyx Layout & Colors */
+          /* Form Wizard View matching exact ChainForge layout and colors */
           <motion.div
             key={step}
             initial={{ opacity: 0, y: 10 }}
@@ -301,11 +297,11 @@ export function KycPage() {
                     />
                   </div>
                   <div className="flex flex-col space-y-2">
-                    <label className="text-sm font-medium text-white">UEN (ACRA Format)</label>
+                    <label className="text-sm font-medium text-white">UEN</label>
                     <input
                       type="text"
                       readOnly
-                      value={formData.uen || '53912345M'}
+                      value={formData.uen || '201912345M'}
                       className="w-full bg-brand-gray border-none rounded-xl h-11 px-4 text-emerald-400 font-mono font-bold outline-none cursor-not-allowed"
                     />
                   </div>
@@ -464,7 +460,7 @@ export function KycPage() {
                       className="mt-0.5 rounded border-none bg-white/10 text-white focus:ring-0"
                     />
                     <span>
-                      I declare that our business crypto payment operations comply with Singapore Monetary Authority of Singapore (MAS) Digital Payment Token guidelines and agree to the Onyx Merchant Agreement.
+                      I declare that our business crypto payment operations comply with Singapore Monetary Authority of Singapore (MAS) Digital Payment Token guidelines and agree to the ChainForge Merchant Agreement.
                     </span>
                   </label>
                 </div>
@@ -475,7 +471,7 @@ export function KycPage() {
                     <div className="bg-brand-gray border border-white/20 rounded-2xl w-full max-w-xl max-h-[85vh] overflow-hidden flex flex-col shadow-2xl animate-in zoom-in-95">
                       <div className="p-5 border-b border-white/10 flex items-center justify-between">
                         <div className="flex items-center gap-2 text-white font-bold text-base">
-                          <ShieldCheck className="w-5 h-5 text-emerald-400" /> Onyx Merchant Terms & Conditions
+                          <ShieldCheck className="w-5 h-5 text-emerald-400" /> ChainForge Merchant Terms & Conditions
                         </div>
                         <button
                           onClick={() => setShowTermsModal(false)}
@@ -488,7 +484,7 @@ export function KycPage() {
                       <div className="p-6 overflow-y-auto space-y-4 text-xs text-white/80 leading-relaxed font-sans">
                         <h4 className="font-bold text-white text-sm">1. MAS License & Digital Payment Token (DPT) Settlement</h4>
                         <p>
-                          Onyx operates as a prototype crypto payment settlement platform designed for Singapore SMEs. In a production deployment, all customer crypto transactions, custody, DPT conversions, and SGD fiat bank payouts are strictly processed by a licensed Major Payment Institution (MPI) licensed by the Monetary Authority of Singapore (MAS) under the Payment Services Act (PSA 2019).
+                          ChainForge operates as a prototype crypto payment settlement platform designed for Singapore SMEs. In a production deployment, all customer crypto transactions, custody, DPT conversions, and SGD fiat bank payouts are strictly processed by a licensed Major Payment Institution (MPI) licensed by the Monetary Authority of Singapore (MAS) under the Payment Services Act (PSA 2019).
                         </p>
 
                         <h4 className="font-bold text-white text-sm">2. Anti-Money Laundering (AML) & Countering Financing of Terrorism (CFT)</h4>

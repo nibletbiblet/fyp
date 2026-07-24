@@ -29,6 +29,8 @@ function isValidSingaporeUen(uen) {
   if (!uen) return false
   const clean = uen.trim().toUpperCase()
 
+  if (/^\d{9}$/.test(clean)) return true
+
   if (!/^[0-9TSR][0-9A-Z]{8,9}$/.test(clean)) return false
 
   // ROB (8 digits + letter)
@@ -146,7 +148,7 @@ export async function submitKyc(merchantId, kycData) {
 
   const merchant = {
     business_name: kycData.businessName || 'Singapore SME Merchant',
-    uen: kycData.uen || '201912345M',
+    uen: String(kycData.uen || '201912345M').trim().toUpperCase().replace(/[^0-9A-Z]/g, ''),
     email: 'merchant@company.sg'
   }
 

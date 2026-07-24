@@ -92,11 +92,11 @@ export default function OnboardingLayout({
         >
           <motion.div variants={{ hidden: { y: 10, opacity: 0 }, visible: { y: 0, opacity: 1, transition: { duration: 0.5 } } }} className="flex items-center gap-2">
             <Circle className="fill-white text-white w-6 h-6" />
-            <span className="text-xl font-semibold tracking-tight text-white">Onyx</span>
+            <span className="text-xl font-semibold tracking-tight text-white">ChainForge</span>
           </motion.div>
           
           <motion.div variants={{ hidden: { y: 10, opacity: 0 }, visible: { y: 0, opacity: 1, transition: { duration: 0.5 } } }}>
-            <h1 className="text-4xl font-medium tracking-tight whitespace-nowrap text-white">Join Onyx</h1>
+            <h1 className="text-4xl font-medium tracking-tight whitespace-nowrap text-white">Join ChainForge</h1>
             <p className="text-white/60 text-sm leading-relaxed mt-2">
               Follow these 3 quick phases to activate your space.
             </p>

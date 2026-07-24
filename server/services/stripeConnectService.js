@@ -49,7 +49,6 @@ const buildStripeMerchantPayload = (merchant) => {
     },
     company: {
       name: businessName,
-      tax_id: uen,
     },
     metadata,
   }

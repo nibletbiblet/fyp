@@ -8,7 +8,7 @@ import { Eye, EyeOff, Crown, Calculator, Monitor } from 'lucide-react'
 const STEPS = [
   { label: 'Register your business' },
   { label: 'Configure your access' },
-  { label: 'Setup payouts' },
+  { label: 'Settlement details' },
 ]
 
 const SG_BANKS = [
@@ -100,7 +100,7 @@ export default function RegisterPage() {
   }
 
   const handleUenChange = async (inputVal: string) => {
-    const clean = inputVal.replace(/\D/g, '').slice(0, 9)
+    const clean = inputVal.trim().toUpperCase().replace(/[^0-9A-Z]/g, '').slice(0, 10)
     setUen(clean)
 
     if (!clean) return
@@ -138,7 +138,10 @@ export default function RegisterPage() {
   const [bankHolderName, setBankHolderName] = useState('')
   const [bankAccountNumber, setBankAccountNumber] = useState('')
 
-  const validateUen = (v: string) => /^\d{9}$/.test(v)
+  const validateUen = (v: string) => {
+    const clean = v.trim().toUpperCase()
+    return /^(\d{8}[A-Z]|\d{9}[A-Z]|[TSR]\d{2}[A-Z]{2}\d{4}[A-Z])$/.test(clean)
+  }
   const validateEmail = (v: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)
   const validatePassword = (v: string) => v.length >= 8
 
@@ -158,6 +161,13 @@ export default function RegisterPage() {
     setLoading(true)
     setServerError('')
     try {
+      localStorage.removeItem('token')
+      localStorage.removeItem('merchant')
+      await fetch('/api/auth/logout', {
+        method: 'POST',
+        credentials: 'include',
+      }).catch(() => {})
+
       const res = await fetch('/api/auth/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -179,9 +189,8 @@ export default function RegisterPage() {
         setServerError(data.error || 'Registration failed')
         return
       }
-      localStorage.setItem('token', data.token)
-      localStorage.setItem('merchant', JSON.stringify(data.merchant))
-      navigate('/kyc')
+
+      navigate(data.verificationUrl || `/verify-email?token=${data.verificationToken}`)
     } catch {
       setServerError('Network error — is the backend running?')
     } finally {
@@ -204,12 +213,12 @@ export default function RegisterPage() {
             <h2 className="text-3xl font-medium tracking-tight text-white">
               {step === 0 && 'Register Your Business'}
               {step === 1 && 'Configure Access'}
-              {step === 2 && 'Setup Payouts'}
+              {step === 2 && 'Settlement Details'}
             </h2>
             <p className="text-white/40 text-sm">
               {step === 0 && 'Input your business details to begin the journey.'}
               {step === 1 && 'Set up your account credentials and role.'}
-              {step === 2 && 'Where should we route your fast settlements?'}
+              {step === 2 && 'Add the bank details ChainForge uses for merchant settlement records.'}
             </p>
           </div>
 
@@ -226,7 +235,7 @@ export default function RegisterPage() {
                     setAcraDoc(doc)
                     if (doc.extractedMetadata) {
                       if (doc.extractedMetadata.businessName) setBusinessName(doc.extractedMetadata.businessName)
-                      if (doc.extractedMetadata.uen) setUen(doc.extractedMetadata.uen)
+                      if (doc.extractedMetadata.uen) setUen(doc.extractedMetadata.uen.trim().toUpperCase())
                     }
                   }}
                   onFileRemove={() => setAcraDoc(undefined)}
@@ -244,13 +253,13 @@ export default function RegisterPage() {
                       <label className="text-sm font-medium text-white">Singapore UEN</label>
                       {uen.length > 0 && validateUen(uen) && (
                         <span className="text-xs text-emerald-400 font-semibold flex items-center gap-1">
-                          Valid 9-digit UEN
+                          Valid UEN
                         </span>
                       )}
                     </div>
                     <input
                       type="text"
-                      placeholder="e.g. 123456789"
+                      placeholder="e.g. 201912345M or 53912345M"
                       value={uen}
                       onChange={(e) => handleUenChange(e.target.value)}
                       className={`w-full bg-brand-gray border-none rounded-xl h-11 px-4 text-white placeholder:text-white/20 outline-none focus:ring-2 focus:ring-white/20 font-mono ${
@@ -259,7 +268,7 @@ export default function RegisterPage() {
                     />
                     {uen.length > 0 && !validateUen(uen) && (
                       <span className="text-xs text-red-400">
-                        Invalid UEN structure. Use 9 digits to match Stripe sandbox test data.
+                        Invalid UEN structure. Use a valid Singapore UEN, for example 201912345M or 53912345M.
                       </span>
                     )}
                   </div>

@@ -97,7 +97,7 @@ CREATE TABLE `transactions` (
   `transaction_id` varchar(36) NOT NULL,
   `merchant_id` varchar(36) NOT NULL,
   `payment_reference` varchar(50) NOT NULL,
-  `triplea_order_id` varchar(100) DEFAULT NULL,
+  `legacy_provider_order_id` varchar(100) DEFAULT NULL,
   `target_amount_sgd` decimal(10,2) NOT NULL,
   `payment_status` enum('PENDING','DETECTED','SETTLED','EXPIRED') NOT NULL DEFAULT 'PENDING',
   `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,

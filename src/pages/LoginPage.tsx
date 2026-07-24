@@ -130,7 +130,7 @@ export default function LoginPage() {
         >
           {/* Header */}
           <div className="text-center space-y-2">
-            <h2 className="text-3xl font-medium tracking-tight text-white">Log in to Onyx</h2>
+            <h2 className="text-3xl font-medium tracking-tight text-white">Log in to ChainForge</h2>
             <p className="text-white/40 text-sm">
               {requiresPdfVerification 
                 ? 'Upload your downloaded KYB Certificate PDF to authenticate your first login.' 

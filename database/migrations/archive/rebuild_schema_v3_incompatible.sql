@@ -30,8 +30,8 @@ CREATE TABLE `merchants` (
   `bank_account_label` varchar(20) DEFAULT NULL, -- UEN
   `status` varchar(50) NOT NULL DEFAULT 'ACTIVE_UNVERIFIED',
   `kyc_status` enum('PENDING','APPROVED','REJECTED','MANUAL_REVIEW') NOT NULL DEFAULT 'PENDING',
-  `triplea_merchant_id` varchar(64) DEFAULT NULL,
-  `triplea_wallet_id` varchar(64) DEFAULT NULL,
+  `legacy_provider_merchant_id` varchar(64) DEFAULT NULL,
+  `legacy_provider_wallet_id` varchar(64) DEFAULT NULL,
   `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
